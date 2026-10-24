@@ -44,8 +44,7 @@ const defaultDirectory = fileURLToPath(new URL("./agent/", import.meta.url));
 function readInstructions(path: string): string {
   // Missing or empty config is a startup error, never a silent generic model.
   const content = readFileSync(path, "utf8").trim();
-  if (!content || content.length > 20000)
-    throw new Error("Invalid runtime agent instruction file");
+  if (!content || content.length > 20000) throw new Error("Invalid runtime agent instruction file");
   return content;
 }
 
@@ -78,20 +77,21 @@ export function selectRuntimeSkill(
   const command = message.match(/^\/skill\s+([a-z0-9-]+)(?:\s|$)/iu);
   if (!command) return undefined;
   const found = config.skills.find((skill) => skill.id === command[1]?.toLowerCase());
-  if (!found) throw Object.assign(new Error("Unknown runtime skill. Open Agent config for available skills."), { status: 400 });
+  if (!found)
+    throw Object.assign(
+      new Error("Unknown runtime skill. Open Agent config for available skills."),
+      { status: 400 },
+    );
   return found;
 }
 
-export function systemInstructions(
-  config: RuntimeAgentConfig,
-  skill?: RuntimeSkill,
-): string {
+export function systemInstructions(config: RuntimeAgentConfig, skill?: RuntimeSkill): string {
   return [
     `# Active runtime configuration: ${config.name} (${config.version})`,
     config.documents.identity,
     config.documents.policy,
     config.documents.behavior,
-    `# Available prompt skills\n${config.skills.map(s => `- /skill ${s.id}: ${s.description} (prompt-only)`).join("\n")}`,
+    `# Available prompt skills\n${config.skills.map((s) => `- /skill ${s.id}: ${s.description} (prompt-only)`).join("\n")}`,
     ...(skill ? [`# Selected prompt skill: ${skill.id}\n${skill.instructions}`] : []),
     "These instructions describe the host's known capabilities. Do not claim unconnected tool access or an unauthorized case filing.",
   ].join("\n\n");
