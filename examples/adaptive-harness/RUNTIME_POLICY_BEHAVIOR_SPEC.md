@@ -70,9 +70,9 @@ Each existing prose assertion receives a stable control ID and a classification 
 
 A requirement can have multiple controls; a failure case can point to multiple requirements. Preserve links to #359/#360's taxonomy and prior failure evidence, and mark missing evidence **unverified**, not "passed". Expand this table against source when implementing; acceptance requires **100% coverage of the explicitly enumerated POLICY/BEHAVIOR clauses as one of blocking/detecting/advisory/unavailable**, not 100% enforcement.
 
-## 4. Typed descriptors — metadata, not an authorization engine
+## 4. Typed descriptors — assembly-bound metadata, not another authorization engine
 
-Implement within app/ as small definitions generated or exported from the actual enforcement modules. No independent Cedar clone, YAML runtime interpreter, extra Tardigrade host, or duplicated rule decision state.
+This section defines **control metadata exported by the real enforcement modules and assembled through the single `app/agent-assembly.ts` composition root** (see section 11). Do not create a separately maintained control registry or duplicate component catalog. No independent Cedar clone, YAML runtime interpreter, extra Tardigrade host, or duplicated rule decision state.
 
 Proposed TypeScript contract (fields illustrative and subject to type-level refinement):
 
@@ -142,13 +142,13 @@ At a high level:
 
 ## 6. A generated source document and separately observable live document
 
-Suggested minimal files:
-- app/controls/control-contract.ts — types, control IDs, actual binding metadata, classification.
-- app/controls/behavior-contract.ts — maps existing five Tardigrade IDs to actual machine states/guards/instruction fragments; no duplicated XState transition graph as second authority.
-- app/controls/generate-docs.ts — deterministic sorted Markdown rendering from compiled/described controls and static policy/behavior contract facts. Writes app/agent/POLICY.md and app/agent/BEHAVIOR.md **as generated source docs** with source rev, status/classification, code refs, evidence/test refs and explicit limitations.
-- app/controls/effective-manifest.ts — live observed process config + guarded remote metadata read. Must not block ordinary chat when Temper is offline; remote state displays unknown while existing Temper capability itself remains fail-closed.
-- app/session-machine-store.ts — reuse DEEP_STATE_PLAN, not a new log.
-- app/tests/control-contract.test.ts, doc-drift.test.ts, machine-recovery.test.ts, policy-boundary.test.ts.
+Suggested minimal files (the same single assembly described in section 11):
+- `app/agent-assembly.ts` — explicit imports and typed wiring of existing XState/Tardigrade/host/Temper implementations; validates provides/requires; no separate execution runtime.
+- `app/components/contracts.ts` and co-located feature definitions — shared types and implementation-bound component descriptors. These **replace** independent control/behavior registries, not add another catalog to maintain.
+- `app/components/build-assembly.ts` — deterministic graph resolution, dependency/impact check and generated `agent-assembly.manifest.json`, `app/agent/POLICY.md`, and `app/agent/BEHAVIOR.md` with source rev, classification, code refs and limitations.
+- `app/components/effective-assembly.ts` — locally loaded source/bundle/process versions plus separately observed (or unknown) Temper metadata; no per-message Temper discovery calls.
+- `app/session-machine-store.ts` — reuse DEEP_STATE_PLAN, not a new log.
+- `app/tests/assembly.test.ts`, `doc-drift.test.ts`, `machine-recovery.test.ts`, `policy-boundary.test.ts`.
 
 Generator must be deterministic and require zero model calls. CI runs generator in check-only mode and fails on dirty drift. Generated Markdown has a provenance banner warning that Git text describes a **source artifact**; it cannot claim Mac activation without a matching live manifest.
 
@@ -204,9 +204,9 @@ Property-based/state-model tests: generate sequences of valid/invalid events, co
 - output one reconciled table with denominator, unverified/disputed controls and owning references.
 - **accept:** no unknown "enforced" entries; cross-check current next, merged PR #1, closed #394 and effective Mac baseline separately.
 
-**W1 — typed contract + generated docs (source-only, no live policy):**
-- implement actual-bound descriptors, deterministic generator, docs-check, "implemented/advisory/unavailable" classifications, and status API schema.
-- **accept:** T01/T02 and source docs regression, zero additional model requests, no change to original feedback behavior.
+**W1 — single Agent Assembly + generated docs (source-only, no live policy):**
+- implement one explicit composition root, actual-bound co-located feature descriptors, provides/requires resolution, dependency/impact analysis, deterministic manifest/doc generator and drift checker. Never create a separately maintained catalog or control registry.
+- **accept:** T01/T02 and T21–T26, T29–T30; source docs/assembly regression, zero additional model requests, no change to original feedback behavior.
 - This can be developed and reviewed independently while W2 durable-state testing proceeds.
 
 **W2 — real durable XState recovery (DEEP_STATE_PLAN dependency):**
@@ -217,9 +217,9 @@ Property-based/state-model tests: generate sequences of valid/invalid events, co
 - make behavior selections correspond to real machine procedures where capabilities exist; structured result/verification states only when supported. Implement host-owned EvidenceReceipt validator before terminal "verified".
 - **accept:** T03/T07/T08/T09; verify behavior never authorizes remote tools, statuses and session transitions are read-backable. No broad self-modification.
 
-**W4 — effective manifest + mobile inspect view:**
-- report local installed source/config/behavior/machine versions and independently available Temper metadata/policy versions; distinguish unavailable from verified; present source-vs-running drift and named control evidence.
-- **accept:** T13/T14/T15/T17/T19/T20, authenticated API tests, phone 390x844 readability. Do not invent a Temper version endpoint.
+**W4 — effective assembly/version readback (UI optional):**
+- report locally installed assembly/config/behavior/machine versions and independently available Temper metadata/policy versions; distinguish unavailable from verified; present source-vs-running drift and named control evidence. Reuse existing authenticated Config API; UI redesign is *not* a prerequisite.
+- **accept:** T13/T14/T15/T17/T19/T20, T27–T28, authenticated API tests and drift/readback evidence. Do not invent a Temper version endpoint.
 
 **W5 — separately authorized live activation and rollback:**
 - governance/Work approval; exact Git SHA + lockfile; preserve Mac session journal and run.sh direct node --import tsx fix; backup/readback; bounded service restart; authenticated local and private tailnet smoke; denied paths and migration; compare effective manifest with source; retain rollback.
@@ -250,7 +250,7 @@ Property-based/state-model tests: generate sequences of valid/invalid events, co
 
 ### 11.1 Connect components at one explicit composition root
 
-Create one \`app/agent-assembly.ts\` (name provisional), with explicit code references to the existing system:
+Create one `app/agent-assembly.ts` (name provisional), with explicit code references to the existing system:
 
 ~~~ts
 // TARGET SHAPE — conceptual, not currently implemented.
@@ -265,7 +265,7 @@ export const statelyAssembly = defineAgentAssembly({
 ~~~
 
 - **Explicit wiring**, not reflection or dynamic, model-authored imports. Only a reviewed source change changes installed features and/or XState graph.
-- \`defineAgentAssembly\` is a tiny local TypeScript validation/composition helper, **not** a new agent runtime. The current server continues to run Luna, XState, Tardigrade, existing SessionStore and TemperGateway.
+- `defineAgentAssembly` is a tiny local TypeScript validation/composition helper, **not** a new agent runtime. The current server continues to run Luna, XState, Tardigrade, existing SessionStore and TemperGateway.
 - Each feature is a **cohesive slice** that binds together its concrete code and metadata: behavior selector ID, legal machine states/events, host guard/validator, prompt or skill instructions, optional external capability requirements and proof tests. A feature may use existing shared components rather than duplicating them.
 - Important limitation: XState does **not** magically install new state nodes from an arbitrary manifest. A new state/transition is an explicit code update to conversation.machine.ts, with version/migration as necessary. Assembly validation checks that feature references and machine declarations agree.
 - Co-locate feature descriptors with their real implementations or a small adjacent feature descriptor. Only independently configured, enforceable, exposed or reusable mechanisms receive catalog identities; do not register every helper function.
@@ -273,7 +273,7 @@ export const statelyAssembly = defineAgentAssembly({
 
 ### 11.2 Typed provides/requires/connects edges
 
-Each feature declares a stable ID, version, provided interfaces/capabilities, required interfaces/capabilities, bound entrypoints and tests. Narrow link types include \`provides\`, \`requires\`, \`selects\`, \`guards\`, \`transitioned_by\`, \`invokes\`, \`authorized_by\`, \`verified_by\`, \`supersedes\`. These refer to **actual typed implementations**, not only prose strings. An external Temper policy/capability reference is **descriptive/required authority**; only live Temper authorizes its requests.
+Each feature declares a stable ID, version, provided interfaces/capabilities, required interfaces/capabilities, bound entrypoints and tests. Narrow link types include `provides`, `requires`, `selects`, `guards`, `transitioned_by`, `invokes`, `authorized_by`, `verified_by`, `supersedes`. These refer to **actual typed implementations**, not only prose strings. An external Temper policy/capability reference is **descriptive/required authority**; only live Temper authorizes its requests.
 
 ~~~ts
 // TARGET SHAPE — choose exact TypeScript types from real exported code.
@@ -310,9 +310,9 @@ A descriptor is an index and validation contract; **not** the execution logic. T
 
 ### 11.3 Build-time output: one bundle fingerprint; no second hand-maintained catalog
 
-Source modules and their actual code-bound descriptors -> resolve/validate assembly graph -> emit an immutable \`agent-assembly.manifest.json\` and deterministic \`POLICY.md\` / \`BEHAVIOR.md\` / test-impact projection. All are generated read models, not independent authored sources.
+Source modules and their actual code-bound descriptors -> resolve/validate assembly graph -> emit an immutable `agent-assembly.manifest.json` and deterministic `POLICY.md` / `BEHAVIOR.md` / test-impact projection. All are generated read models, not independent authored sources.
 
-The effective local bundle records: \`assemblyVersion\` (canonical content hash of source declarations/dependency resolution), \`gitSha\`, \`machineVersion\`, \`behaviorVersion\`, \`localPolicyVersion\`, \`promptSkillHash\`, enabled features, dependencies, required tests and optional migrations. Session events pin the historical source/bundle versions; retries/replay reuse the original accepted selection. Live Temper revocation/current policy always wins over old session pins.
+The effective local bundle records: `assemblyVersion` (canonical content hash of source declarations/dependency resolution), `gitSha`, `machineVersion`, `behaviorVersion`, `localPolicyVersion`, `promptSkillHash`, enabled features, dependencies, required tests and optional migrations. Session events pin the historical source/bundle versions; retries/replay reuse the original accepted selection. Live Temper revocation/current policy always wins over old session pins.
 
 Runtime reads the compiled/validated assembly. On startup, refuse a broken/inconsistent assembly for trusted boundaries. An unavailable Temper service marks its guarded capabilities unavailable/denied without unnecessarily breaking unrelated conversational chat. The source manifest does NOT assert a remote Cedar policy version without independent readback.
 
@@ -324,7 +324,7 @@ Treat one scoped reviewed PR/Work as a **change transaction** affecting any numb
 
 1. **Locate/reuse:** search by existing stable ID, provided interface, related prior failure/eval and aliases/superseded/rejected components; modify rather than duplicate where appropriate. Semantic "same idea" is review-assisted, NOT guaranteed by static analysis.
 2. **Declare delta:** new/modify/retire, affected features and provides/requires/bindings, accepted dependencies, changed scope/permissions, old/new interface versions and rollout expectations. No implicit privilege expansion.
-3. **Compute transitive reverse dependencies:** derive affected behavior selectors, state machine guards/events, skills, policies, tool call sites, migrations, prompt/docs projections and regression suites. Generate a human-readable \`assembly-impact.md\` in CI/PR artifacts; no new tracking issue required.
+3. **Compute transitive reverse dependencies:** derive affected behavior selectors, state machine guards/events, skills, policies, tool call sites, migrations, prompt/docs projections and regression suites. Generate a human-readable `assembly-impact.md` in CI/PR artifacts; no new tracking issue required.
 4. **Classify compatibility**: (a) docs/prompt-only, (b) behavior routing, (c) transition/event/snapshot breaking, (d) governed capability/authorization, (e) external outcome/verification. Apply appropriate tests/gates for the highest-impact class.
 5. **Update implementations and links together**: one reviewed source change touching needed files. Enforce that dependencies and tests exist; CI refuses broken bindings, undocumented permissions, stale generated files and missing migrations. Full negative suites for trusted boundaries.
 6. **Activate separately** under existing Work/approval if needed: build, backup, pin/restart only approved service, replay legacy sessions in copies, independently verify running bundle and Temper effective eligibility.
@@ -332,7 +332,7 @@ Treat one scoped reviewed PR/Work as a **change transaction** affecting any numb
 
 **Concrete delta examples:**
 - **Add a prompt skill:** define skill and descriptor, declare behavior/context constraints, ensure /skill allowlist; generator updates docs; skill never creates a tool grant.
-- **Add a behavior:** implement/extend Tardigrade classification and typed BehaviorId, bind legal XState selection/procedure, attach tests; if machine topology changes bump \`machineVersion\` and migrate persisted sessions.
+- **Add a behavior:** implement/extend Tardigrade classification and typed BehaviorId, bind legal XState selection/procedure, attach tests; if machine topology changes bump `machineVersion` and migrate persisted sessions.
 - **Modify policy:** host guard or externally approved Temper policy changes at respective enforcement owner; update affected descriptors and deny/bypass tests; policy prose is generated after code change. No TS metadata can override Cedar.
 - **Add a capability:** actual host adapter + exact schema, fixed scope/tenant, auth boundary, constrained caller binding, negative tests and Temper policy evidence; if not separately approved, descriptor remains candidate/disabled.
 - **Retire a component:** dependency search and reconciliation; block removal while active dependents or historical sessions require it; explicit replacements/migrations preserve events, tests and receipts.
@@ -340,7 +340,7 @@ Treat one scoped reviewed PR/Work as a **change transaction** affecting any numb
 ### 11.5 Runtime flow and composition verification
 
 The execution order remains:
-\`authenticated input -> journal/state restore -> mandatory host preflight -> Tardigrade proposes behavior -> XState accepts legal event/behavior -> host executes eligible step -> Temper authorizes any governed external operation -> native independent readback -> recorded outcome/next legal state\`.
+`authenticated input -> journal/state restore -> mandatory host preflight -> Tardigrade proposes behavior -> XState accepts legal event/behavior -> host executes eligible step -> Temper authorizes any governed external operation -> native independent readback -> recorded outcome/next legal state`.
 
 This is a **logical contract**; code may evaluate preflight/selector in another deterministic order only if no model or effect can escape required gates and the observable sequence is recorded. Tardigrade is never authorization, and verification cannot be inferred from a selector.
 
@@ -384,9 +384,10 @@ Efficiency: one deterministic assembly resolution at build/startup, lightweight 
 - [ ] XState durable snapshot + journal replay, interrupted-call recovery and legacy migration independently pass on both new and pre-upgrade sessions.
 - [ ] Temper credentials, tenant, Cedar/spec policy, health and provenance are distinguished; effective remote status is evidence-backed or unknown.
 - [ ] Verification claim is scoped to structured workflow results; invalid/missing evidence cannot produce a verified terminal state.
-- [ ] Mobile view reports effective code/config/machine/behavior/policy versions, live vs source drift, permitted next actions, and honest unavailable statuses.
+- [ ] The installed Agent Assembly readback reports effective source/config/machine/behavior/policy versions, dependency compatibility and honest source-vs-runtime drift; a new management UI is optional.
 - [ ] No new model calls for ordinary chat; latency/token/journal measurements compared to baseline and recorded.
 - [ ] Existing chat, feedback dismissal, auth/origin, private Tailscale and pending-only Case flows regressions pass.
+- [ ] One explicit composition root and generated manifest; declared dependencies and reverse-impact checks prevent missing/duplicate/cyclic/retired capabilities, with change compatibility and migration validated (T21–T32).
 - [ ] Scoped Work, Decision/Gate, rollout permission, exact CI/build/readback receipts, independent Mac/Temper/native evidence and rollback are recorded **before any Done/live claim**.
 
 **Status at authoring:** spec only. No code implementation, test run, privilege change, Mac mutation, Cedar deploy, live activation or formal promotion is claimed.
