@@ -1,0 +1,24 @@
+name: Tardigrade lock candidate (temporary)
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - run: npm i pnpm@10.28.2 -g
+      - name: Resolve lockfile without installing
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --lockfile-only --no-frozen-lockfile
+          echo "BEGIN_TARDIE_LOCK_DIFF"
+          git diff -- pnpm-lock.yaml
+          echo "END_TARDIE_LOCK_DIFF"
