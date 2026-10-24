@@ -2,6 +2,15 @@
 
 **This file is an actionable work order for a coding agent.** Implement the selected, independent Stately harness in the existing draft branch. Read this file, then `IMPLEMENTATION_PLAN.md` and `feedback-trigger/README.md` before editing. Do not ask for another architecture decision when the existing instructions settle it. Continue as far as existing permissions and live infrastructure allow, and record results rather than claiming unexecuted tests passed.
 
+## Current follow-up: Mac rollout and deeper session state
+
+This work now has two explicit, nonoverlapping task documents; read these **before** writing another plan:
+
+- [`app/MAC_ROLLOUT.md`](app/MAC_ROLLOUT.md) — deploy the *already-tested* Tardigrade behavior bridge to the **existing** Mac LaunchAgent after read-only preflight, preserving local data and rollback. Expected code SHA: `a50393f06e9f669fa5825a24500535a413c9308d`, CI #40068259735. The Mac Remote Desktop Commander connection was offline when last checked; do not claim a restart occurred.
+- [`DEEP_STATE_PLAN.md`](DEEP_STATE_PLAN.md) — implement true persisted XState session restoration/replay, feedback approvals, interruption recovery, v1 journal migration and explicit state readback, without introducing a second durable runtime. **This is not present in the current code.**
+
+Keep the initial rollout of the verified atom bridge separate from the later machine-snapshot migration: they have different recovery risks. Do not promote a source-only change as live. Continue implementation rather than another exploration loop, but stop if a requested Mac mutation cannot be safely reconciled with the installed service.
+
 ## Branch, scope, and prior work
 
 - Repo: `toasterman234/agent`; checkout `work/388-feedback-trigger-scaffold` (existing draft PR [#1](https://github.com/toasterman234/agent/pull/1)); fork default branch `next`. Never commit this work directly to `next`. If the branch or upstream has moved, inspect and reconcile the actual HEAD first.
