@@ -66,7 +66,7 @@ export function composeBehavior(
   const context = atom((get) => {
     const prior = get(previous);
     const route = get(intent);
-    const recent = get(history).slice(-8).map((item) => item.messageId);
+    const recent = get(history).filter((item) => item.messageId !== messageId).slice(-8).map((item) => item.messageId);
     const continuing = Boolean(prior?.goal);
     const behaviorId: BehaviorId =
       route === "continue" && continuing ? "continue-work" :
