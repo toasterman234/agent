@@ -120,7 +120,15 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
 }
 
 function emptyState(sessionId = ""): SessionState {
-  return { sessionId, createdAt: "", messages: [], feedback: [], traces: [], eventCount: 0, lastHash: null };
+  return {
+    sessionId,
+    createdAt: "",
+    messages: [],
+    feedback: [],
+    traces: [],
+    eventCount: 0,
+    lastHash: null,
+  };
 }
 
 export class SessionStore {
