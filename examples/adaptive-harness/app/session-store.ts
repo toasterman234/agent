@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { TurnTrace } from "./activity.js";
+import type { BehaviorSelection } from "./behavior-composer.js";
 
 export type SessionMessage = {
   messageId: string;
@@ -25,7 +26,8 @@ export type SessionEvent =
   | { type: "message.user"; message: SessionMessage }
   | { type: "message.assistant"; message: SessionMessage }
   | { type: "feedback.updated"; feedback: SessionFeedback }
-  | { type: "turn.trace"; trace: TurnTrace };
+  | { type: "turn.trace"; trace: TurnTrace }
+  | { type: "behavior.selected"; selection: BehaviorSelection };
 
 type StoredEvent = {
   schemaVersion: 1;
@@ -41,6 +43,7 @@ export type SessionState = {
   messages: SessionMessage[];
   feedback: SessionFeedback[];
   traces: TurnTrace[];
+  behavior: BehaviorSelection | null;
   eventCount: number;
   lastHash: string | null;
 };
@@ -91,6 +94,13 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
     }
     return { ...state, messages: [...state.messages, event.message] };
   }
+  if (event.type === "behavior.selected") {
+    const selected = event.selection;
+    if (!selected || typeof selected.messageId !== "string" ||
+        !["continue-work", "revise-work", "verification", "status-check", "conversation"].includes(selected.behaviorId))
+      throw new Error("Invalid behavior selection");
+    return { ...state, behavior: selected };
+  }
   if (event.type === "turn.trace") {
     // Traces never contain model prompts, completions, secrets or raw error strings.
     const trace = event.trace;
@@ -126,6 +136,7 @@ function emptyState(sessionId = ""): SessionState {
     messages: [],
     feedback: [],
     traces: [],
+    behavior: null,
     eventCount: 0,
     lastHash: null,
   };
@@ -217,7 +228,8 @@ export class SessionStore {
         event.type !== "message.user" &&
         event.type !== "message.assistant" &&
         event.type !== "feedback.updated" &&
-        event.type !== "turn.trace"
+        event.type !== "turn.trace" &&
+        event.type !== "behavior.selected"
       ) {
         throw new Error("Unsupported session event");
       }
