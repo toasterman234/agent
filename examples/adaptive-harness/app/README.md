@@ -17,8 +17,11 @@ Safe environment names:
 - `STATELY_PROXY_API_KEY` or `CLIPROXY_API_KEY` — supplied at runtime only; never commit or log its value.
 - `STATELY_DATA_DIR` — defaults to `~/.local/share/stately-adaptive-harness`.
 - `STATELY_PORT` — defaults to an available local port.
+- `STATELY_ALLOWED_ORIGINS` — comma-separated exact browser origins; required when serving through a private reverse proxy (for example, `https://bens-mac-mini.taila1553c.ts.net:8787`).
 
 The process prints a URL only after its listener is bound. `GET /healthz` returns the model, proxy base URL, configuration status, and `caseFiling: pending-only`; it never returns secrets. With the server running, verify it with `STATELY_URL=http://127.0.0.1:<port> pnpm exec tsx examples/adaptive-harness/app/smoke.ts`.
+
+For a private mobile pilot, keep the Node host on loopback and use Tailscale Serve (never Funnel). Set `STATELY_ALLOWED_ORIGINS` to the exact HTTPS Serve origin, then verify `/healthz` and the browser flow from a phone that is signed into the same tailnet. Tailscale ACLs are the network boundary; this candidate has no application user-login system.
 
 ## API and behavior
 
@@ -30,4 +33,4 @@ Session files are append-only JSONL with a hash chain, contiguous sequence numbe
 
 ## Verification limits
 
-The Mac CLIProxyAPI integration uses the existing OpenAI-compatible Chat Completions adapter and direct model id `gpt-5.6-luna`. A live probe must verify the local listener and authenticated request before claiming model connectivity. No Tailscale Serve/Funnel or launchd change is made by this source-only harness. No production GitHub case filing is enabled.
+The Mac CLIProxyAPI integration uses the existing OpenAI-compatible Chat Completions adapter and direct model id `gpt-5.6-luna`. A live probe must verify the local listener and authenticated request before claiming model connectivity. The source-only harness does not configure Tailscale or launchd itself. A separately authorized local LaunchAgent may run it, but any mobile exposure must remain private tailnet-only; no Funnel/public exposure is supported. No production GitHub case filing is enabled.

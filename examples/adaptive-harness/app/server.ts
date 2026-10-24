@@ -110,10 +110,19 @@ function originAllowed(
 ): boolean {
   const origin = request.headers.origin;
   if (!origin) return true;
-  const allowed =
+  const configured =
     options.allowedOrigin ??
-    (actualPort ? `http://${options.host ?? "127.0.0.1"}:${actualPort}` : undefined);
-  return Boolean(allowed && origin === allowed);
+    process.env.STATELY_ALLOWED_ORIGINS ??
+    process.env.STATELY_ALLOWED_ORIGIN;
+  const allowed = configured
+    ? configured
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : actualPort
+      ? [`http://${options.host ?? "127.0.0.1"}:${actualPort}`]
+      : [];
+  return allowed.includes(origin);
 }
 
 function sessionView(state: SessionState) {
@@ -456,7 +465,9 @@ export function startAdaptiveServer(options: ServerOptions = {}): Promise<Adapti
 }
 
 if (import.meta.url === new URL(process.argv[1]!, "file:").href) {
-  startAdaptiveServer()
+  startAdaptiveServer({
+    allowedOrigin: process.env.STATELY_ALLOWED_ORIGINS ?? process.env.STATELY_ALLOWED_ORIGIN,
+  })
     .then((app) => {
       const address = app.address();
       console.log(`stately adaptive harness listening at http://${address?.host}:${address?.port}`);

@@ -13,7 +13,9 @@ const close = (server: { close(callback: (error?: Error) => void): void }) =>
     server.close((error) => (error ? reject(error) : resolve())),
   );
 
-async function appWith(fixture: { judge?: FeedbackJudge; provider?: ChatProvider } = {}) {
+async function appWith(
+  fixture: { judge?: FeedbackJudge; provider?: ChatProvider; allowedOrigin?: string } = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), "stately-app-"));
   const provider =
     fixture.provider ??
@@ -30,6 +32,7 @@ async function appWith(fixture: { judge?: FeedbackJudge; provider?: ChatProvider
     store: new SessionStore(directory),
     provider,
     judge: fixture.judge,
+    allowedOrigin: fixture.allowedOrigin,
   });
   apps.push({ close: () => close(app.server) });
   return { app, directory, provider };
@@ -165,6 +168,19 @@ describe("standalone adaptive harness", () => {
     const persisted = await new SessionStore(directory).load(created.sessionId);
     expect(persisted?.feedback[0]?.status).toBe("dismissed");
     expect(persisted?.messages.some((message) => message.role === "assistant")).toBe(true);
+  });
+
+  test("enforces the configured mobile origin", async () => {
+    const { app } = await appWith({ allowedOrigin: "https://mobile.example" });
+    const address = app.address()!;
+    const allowed = await fetch(`http://${address.host}:${address.port}/healthz`, {
+      headers: { origin: "https://mobile.example" },
+    });
+    expect(allowed.status).toBe(200);
+    const rejected = await fetch(`http://${address.host}:${address.port}/healthz`, {
+      headers: { origin: "https://other.example" },
+    });
+    expect(rejected.status).toBe(403);
   });
 
   test("does not allow a token from another session to read or post", async () => {
