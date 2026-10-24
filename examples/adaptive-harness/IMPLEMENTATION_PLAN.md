@@ -4,6 +4,13 @@
 **Primary implementation:** [toasterman234/agent draft PR #1](https://github.com/toasterman234/agent/pull/1), `work/388-feedback-trigger-scaffold`.  
 **Source and behavior case:** [master-repo-0.1 #388](https://github.com/toasterman234/master-repo-0.1/issues/388), with [E36/#386](https://github.com/toasterman234/master-repo-0.1/issues/386), [E37/#387](https://github.com/toasterman234/master-repo-0.1/issues/387), and [Case intake #76](https://github.com/toasterman234/master-repo-0.1/issues/76).
 
+## Next scoped work and Mac rollout (2026-10-24)
+
+- **Behavior bridge source verified:** `tardie@0.50.0` atoms + XState guard + session-journal behavior selection, pinned implementation `a50393f06e9f669fa5825a24500535a413c9308d`. [CI #40068259735](https://github.com/toasterman234/agent/actions/runs/40068259735) passed lint, format, knip, 1,656 repository tests and all typechecks. This proves the fork candidate, **not** the running Mac.
+- **Mac rollout execution:** [`app/MAC_ROLLOUT.md`](app/MAC_ROLLOUT.md). The connected Desktop Commander Mac entries are offline; no authorized Mac shell/deploy was available in this ChatGPT turn. The runbook describes exact target, read-only preflight, backup, installer/LaunchAgent safety, live readback and rollback. Do not confuse a GitHub source update with a deployment.
+- **Durable XState lifecycle work:** [`DEEP_STATE_PLAN.md`](DEEP_STATE_PLAN.md) is the executable specification for persisted native XState snapshots, journaled external events, migration of existing JSONL sessions, feedback wait/continuation, idempotent model calls and recovery, host state API and tests. This is **planned, not yet implemented**. Until it is, cross-message durability comes from selected behavior/session journal, while `createConversationActor(sessionId)` is still constructed anew for each turn.
+- Keep all implementation in existing [draft PR #1](https://github.com/toasterman234/agent/pull/1), with #388 as the existing master work/evidence record. A new framework, second journal, unapproved production case filing, or public Tailscale exposure is not part of this work.
+
 ## Current implementation receipt — 2026-10-24
 
 - Added the standalone `app/` host, responsive UI, persistent hash-chained session log, XState conversation machine, strict feedback judge, CLIProxyAPI adapter, smoke check, origin allowlist, LaunchAgent recipe, and pending-only case seam.
