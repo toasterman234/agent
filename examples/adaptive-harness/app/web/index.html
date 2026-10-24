@@ -85,9 +85,16 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
-      small {
-        color: #aeb8ca;
-      }
+      small { color: #aeb8ca; }
+      #config-toggle { margin-top: .75rem; padding: .45rem .75rem; background: #283349; }
+      #config-panel { padding: .8rem 1rem; background: #19212d; border-bottom: 1px solid #303746; max-height: 48vh; overflow: auto; }
+      #config-panel[hidden] { display: none; }
+      #config-panel pre { white-space: pre-wrap; font: .78rem/1.45 ui-monospace, monospace; overflow-wrap: anywhere; }
+      #config-panel details { margin: .65rem 0; }
+      #config-skills { display: grid; gap: .6rem; }
+      .skill-row { display: flex; gap: .75rem; align-items: center; justify-content: space-between; background: #242b38; border-radius: .65rem; padding: .6rem; }
+      .skill-row button { flex-shrink: 0; font-size: .85rem; padding: .45rem; }
+      #config-summary { color: #aeb8ca; font-size: .9rem; }
     </style>
   </head>
   <body>
@@ -95,8 +102,16 @@
       <header>
         <strong>Stately adaptive harness</strong><br /><small id="status"
           >Starting local session…</small
-        >
+        ><div><button id="config-toggle" type="button" aria-expanded="false">Agent config &amp; skills</button></div>
       </header>
+      <section id="config-panel" hidden aria-label="Active runtime configuration">
+        <div id="config-summary">Loading runtime configuration…</div>
+        <details><summary>Identity (AGENTS.md)</summary><pre id="config-identity"></pre></details>
+        <details><summary>Policy</summary><pre id="config-policy"></pre></details>
+        <details><summary>Behavior</summary><pre id="config-behavior"></pre></details>
+        <strong>Available prompt skills</strong><div id="config-skills"></div>
+        <small>Prompt skills guide replies only. No shell, file-edit, remote tools or GitHub case-filing capability is attached.</small>
+      </section>
       <section id="messages" aria-live="polite"></section>
       <footer>
         <form id="chat">
@@ -113,6 +128,8 @@
       const messages = document.querySelector("#messages");
       const status = document.querySelector("#status");
       const input = document.querySelector("#input");
+      const configButton = document.querySelector("#config-toggle");
+      const configPanel = document.querySelector("#config-panel");
       let session;
       const add = (text, role) => {
         const node = document.createElement("div");
@@ -128,7 +145,13 @@
           if (feedback.status === "pending") {
             const card = document.createElement("div");
             card.className = "review";
-            card.innerHTML = `<strong>Feedback review pending</strong><br>${feedback.reason}<br><small>Case filing is unavailable in this candidate harness.</small>`;
+            const heading = document.createElement("strong");
+            heading.textContent = "Feedback review pending";
+            const reason = document.createElement("p");
+            reason.textContent = feedback.reason;
+            const notice = document.createElement("small");
+            notice.textContent = "Case filing is unavailable in this candidate harness.";
+            card.append(heading, reason, notice);
             const dismiss = document.createElement("button");
             dismiss.textContent = "Dismiss with reason";
             dismiss.onclick = async () => {
@@ -152,6 +175,58 @@
             card.append(dismiss, file);
             messages.append(card);
           }
+        }
+      };
+      async function showRuntimeConfig() {
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(session.sessionId)}/config`,
+        );
+        if (!response.ok) throw new Error("Cannot access the runtime configuration");
+        const config = await response.json();
+        document.querySelector("#config-summary").textContent =
+          `${config.name} · model ${config.model} · config ${config.version} · skills: prompt-only`;
+        for (const section of ["identity", "policy", "behavior"]) {
+          document.querySelector(`#config-${section}`).textContent =
+            config.documents[section] ?? "(not loaded)";
+        }
+        const list = document.querySelector("#config-skills");
+        list.replaceChildren();
+        for (const skill of config.skills) {
+          const row = document.createElement("div");
+          row.className = "skill-row";
+          const label = document.createElement("div");
+          const name = document.createElement("strong");
+          name.textContent = skill.title;
+          const description = document.createElement("small");
+          description.textContent = ` ${skill.description} · ${skill.mode}`;
+          label.append(name, document.createElement("br"), description);
+          const use = document.createElement("button");
+          use.type = "button";
+          use.textContent = "Use";
+          use.setAttribute("aria-label", `Use ${skill.title} skill`);
+          use.onclick = () => {
+            input.value = `/skill ${skill.id} `;
+            configPanel.hidden = true;
+            configButton.setAttribute("aria-expanded", "false");
+            input.focus();
+          };
+          row.append(label, use);
+          list.append(row);
+        }
+      }
+      configButton.onclick = async () => {
+        if (!session) return;
+        if (!configPanel.hidden) {
+          configPanel.hidden = true;
+          configButton.setAttribute("aria-expanded", "false");
+          return;
+        }
+        try {
+          await showRuntimeConfig();
+          configPanel.hidden = false;
+          configButton.setAttribute("aria-expanded", "true");
+        } catch (error) {
+          alert(error.message);
         }
       };
       async function start() {
