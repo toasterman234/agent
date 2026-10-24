@@ -30,6 +30,7 @@ import {
 import { createConversationActor } from "./conversation.machine.js";
 import { readFile } from "node:fs/promises";
 import { ActivityTracker } from "./activity.js";
+import { composeBehavior, behaviorInstructions, type BehaviorSelection } from "./behavior-composer.js";
 import {
   loadRuntimeAgentConfig,
   runtimeConfigView,
@@ -140,6 +141,7 @@ function sessionView(state: SessionState) {
     createdAt: state.createdAt,
     messages: state.messages,
     feedback: state.feedback,
+    behavior: state.behavior,
     eventCount: state.eventCount,
   };
 }
@@ -206,10 +208,10 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           },
         ]);
 
-  const normalTurn = (state: SessionState, message: IncomingMessage) => async () => {
+  const normalTurn = (state: SessionState, message: IncomingMessage, behavior: BehaviorSelection) => async () => {
     const skill = selectRuntimeSkill(message.text, runtimeConfig);
     const context: ProviderMessage[] = [
-      { role: "system", content: systemInstructions(runtimeConfig, skill) },
+      { role: "system", content: `${systemInstructions(runtimeConfig, skill)}\n\n${behaviorInstructions(behavior)}` },
       ...state.messages
         .filter((item) => item.messageId !== message.messageId)
         .slice(-10)
@@ -266,6 +268,9 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             },
           ]);
         }
+        const selection = state.behavior?.messageId === messageId
+          ? state.behavior
+          : composeBehavior(state, messageId, text).selection;
         const incoming: IncomingMessage = {
           sessionId,
           messageId,
@@ -275,6 +280,11 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         const actor = createConversationActor(sessionId);
         actor.start();
         actor.send({ type: "RECEIVE_MESSAGE", messageId, text });
+        actor.send({ type: "SELECT_BEHAVIOR", messageId, behaviorId: selection.behaviorId });
+        if (actor.getSnapshot().context.selectedBehavior !== selection.behaviorId)
+          throw Object.assign(new Error("XState rejected proposed behavior"), { status: 409 });
+        if (state.behavior?.messageId !== messageId)
+          state = await store.appendUnlocked(sessionId, [{ type: "behavior.selected", selection }]);
         const gated = createGatedTurnHost(
           {
             judge: {
@@ -287,7 +297,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             ...(options.caseSink ? { caseSink: options.caseSink } : {}),
           },
           async () => {
-            const result = await normalTurn(state!, incoming)();
+            const result = await normalTurn(state!, incoming, selection)();
             return result;
           },
         );
@@ -446,6 +456,11 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       const sessionId = parts[2];
       if (!authenticatedSession(request, sessionId))
         return json(response, 401, { error: "Session authentication required" });
+      if (request.method === "GET" && parts.length === 4 && parts[3] === "behavior") {
+        const state = await store.load(sessionId);
+        if (!state) return json(response, 404, { error: "Session not found" });
+        return json(response, 200, { selected: state.behavior, source: "session-journal", composer: "tardie/atoms" });
+      }
       if (request.method === "GET" && parts.length === 4 && parts[3] === "activity") {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
