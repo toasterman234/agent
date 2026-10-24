@@ -79,6 +79,7 @@ type GatewayOptions = {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
   readToken?: ReadToken;
+  fixtureIncidentId?: string;
 };
 
 const trimBaseUrl = (value: string) => value.replace(/\/+$/u, "");
@@ -172,7 +173,53 @@ async function responseJson(response: Response, correlationId: string): Promise<
   }
 }
 
+export type TemperFixtureWriteOutcome =
+  | "applied"
+  | "already-applied"
+  | "pending-approval"
+  | "conflict";
+
+export type TemperFixtureWriteResult = {
+  outcome: TemperFixtureWriteOutcome;
+  correlationId: string;
+  tenant: typeof TEMPER_TENANT;
+  principal: string;
+  entityType: "Incident";
+  entityId: string;
+  entity?: unknown;
+  entityStatus?: string;
+  status?: number;
+};
+
+const isRecordValue = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object";
+
+/** Temper entities carry fields at top level; tolerate a nested `fields` bag and case variants. */
+function entityField(entity: unknown, names: string[]): unknown {
+  if (!isRecordValue(entity)) return undefined;
+  const bags: Record<string, unknown>[] = [entity];
+  if (isRecordValue(entity.fields)) bags.push(entity.fields);
+  for (const bag of bags) {
+    for (const name of names) {
+      if (name in bag && bag[name] !== undefined) return bag[name];
+    }
+  }
+  return undefined;
+}
+
+const entityStatusOf = (entity: unknown): string | undefined => {
+  const value = entityField(entity, ["status", "Status"]);
+  return typeof value === "string" ? value : undefined;
+};
+
+const entityInvestigatorOf = (entity: unknown): string | undefined => {
+  const value = entityField(entity, ["InvestigatorId", "investigatorId", "investigator_id"]);
+  return typeof value === "string" ? value : undefined;
+};
+
 export class TemperGateway {
+  readonly fixtureIncidentId: string | undefined;
+
   private readonly baseUrl: string;
   private readonly tokenFile: string;
   private readonly expectedPrincipal: string;
@@ -187,6 +234,8 @@ export class TemperGateway {
     this.tokenFile = options.tokenFile ?? defaultTokenFile();
     this.expectedPrincipal =
       options.expectedPrincipal ?? process.env.STATELY_TEMPER_PRINCIPAL ?? DEFAULT_TEMPER_PRINCIPAL;
+    const fixture = options.fixtureIncidentId ?? process.env.STATELY_TEMPER_FIXTURE_INCIDENT_ID;
+    this.fixtureIncidentId = fixture && fixture.trim() ? fixture.trim() : undefined;
     this.timeoutMs = options.timeoutMs ?? 5000;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.readToken = options.readToken ?? (() => readProtectedToken(this.tokenFile));
@@ -273,6 +322,78 @@ export class TemperGateway {
     };
   }
 
+  /**
+   * The single governed write (P3): BeginInvestigation on the one host-configured
+   * fixture Incident. Cedar's deny (403) is the designed approval gate: the kernel
+   * mints a pending decision for a human, so 403 is an outcome, not an error.
+   */
+  async beginFixtureInvestigation(
+    options: TemperCallOptions = {},
+  ): Promise<TemperFixtureWriteResult> {
+    const correlationId = options.correlationId ?? randomUUID();
+    const fixtureId = this.fixtureIncidentId;
+    if (!fixtureId) {
+      throw new TemperGatewayError(
+        "Temper fixture incident is not configured",
+        "configuration",
+        correlationId,
+      );
+    }
+    const base = {
+      correlationId,
+      tenant: TEMPER_TENANT,
+      entityType: "Incident" as const,
+      entityId: fixtureId,
+    };
+    const read = await this.readEntity("Incident", fixtureId, { correlationId });
+    const status = entityStatusOf(read.entity);
+    if (status === "Investigating" && entityInvestigatorOf(read.entity) === "stately") {
+      return {
+        ...base,
+        outcome: "already-applied",
+        principal: read.principal,
+        entity: read.entity,
+        entityStatus: status,
+      };
+    }
+    if (status !== "Detected") {
+      return {
+        ...base,
+        outcome: "conflict",
+        principal: read.principal,
+        entityStatus: status ?? "unknown",
+      };
+    }
+    const principal = await this.authenticate(correlationId);
+    const encodedId = encodeURIComponent(fixtureId);
+    const response = await this.request(
+      `/tdata/Incidents('${encodedId}')/Temper.IncidentRCA.BeginInvestigation`,
+      principal,
+      correlationId,
+      { method: "POST", body: { InvestigatorId: "stately" } },
+    );
+    if (response.status === 403) {
+      // Denied by Cedar: the kernel mints a pending decision for human approval.
+      return {
+        ...base,
+        outcome: "pending-approval",
+        principal: principal.agentInstanceId,
+        status: 403,
+        entityStatus: status,
+      };
+    }
+    if (!response.ok) throw this.httpError(response.status, correlationId);
+    // Readback verification: the applied outcome reflects the verified entity state.
+    const readback = await this.readEntity("Incident", fixtureId, { correlationId });
+    return {
+      ...base,
+      outcome: "applied",
+      principal: readback.principal,
+      entity: readback.entity,
+      entityStatus: entityStatusOf(readback.entity) ?? status,
+    };
+  }
+
   private async authenticate(correlationId: string): Promise<AuthenticatedPrincipal> {
     let token: string;
     try {
@@ -331,14 +452,18 @@ export class TemperGateway {
     path: string,
     principal: AuthenticatedPrincipal,
     correlationId: string,
+    init: { method?: string; body?: unknown } = {},
   ): Promise<Response> {
     try {
       return await this.fetchImpl(`${this.baseUrl}${path}`, {
+        ...(init.method ? { method: init.method } : {}),
+        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
         headers: {
           Authorization: `Bearer ${principal.token}`,
           "X-Tenant-Id": TEMPER_TENANT,
           "X-Correlation-Id": correlationId,
           "X-Temper-Principal-Id": principal.agentInstanceId,
+          ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
