@@ -31,6 +31,13 @@ import { createConversationActor } from "./conversation.machine.js";
 import { readFile } from "node:fs/promises";
 import { ActivityTracker } from "./activity.js";
 import {
+  TemperGateway,
+  TemperGatewayError,
+  TEMPER_ALLOWED_ENTITY_TYPES,
+  TEMPER_TENANT,
+  type TemperAllowedEntityType,
+} from "./temper-gateway.js";
+import {
   loadRuntimeAgentConfig,
   runtimeConfigView,
   selectRuntimeSkill,
@@ -52,12 +59,14 @@ type ServerOptions = {
   judge?: FeedbackJudge;
   caseSink?: FeedbackCaseSink;
   runtimeConfig?: RuntimeAgentConfig;
+  temperGateway?: TemperGateway;
 };
 
 export type AdaptiveServer = {
   server: Server;
   store: SessionStore;
   provider: ChatProvider;
+  temperGateway: TemperGateway;
   address(): { host: string; port: number } | null;
 };
 
@@ -140,6 +149,7 @@ function sessionView(state: SessionState) {
     createdAt: state.createdAt,
     messages: state.messages,
     feedback: state.feedback,
+    temperTraces: state.temperTraces,
     eventCount: state.eventCount,
   };
 }
@@ -158,6 +168,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   const dataDirectory = defaultSessionDirectory();
   const journal = options.journal ?? new FileDispositionJournal(join(dataDirectory, "feedback"));
   const provider = options.provider ?? createProxyProvider();
+  const temperGateway = options.temperGateway ?? new TemperGateway();
   // Required configuration is read once at startup; a missing file fails closed.
   const runtimeConfig = options.runtimeConfig ?? loadRuntimeAgentConfig();
   const judge = options.judge ?? createLunaFeedbackJudge(provider);
@@ -403,6 +414,78 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
     return result;
   };
 
+  const handleTemperCapability = async (request: NodeRequest, sessionId: string) => {
+    const body = await readBody(request);
+    const capability = stringField(body, "capability", 40);
+    const correlationId = randomUUID();
+    const state = await store.load(sessionId);
+    if (!state) throw Object.assign(new Error("Session not found"), { status: 404 });
+    if (
+      !capability ||
+      !["health", "metadata", "allowed-entities", "read-entity"].includes(capability)
+    )
+      throw Object.assign(new Error("Unknown Temper capability"), { status: 400 });
+
+    activity.startTemper(sessionId, capability, TEMPER_TENANT, correlationId);
+    activity.markTemper(sessionId, "authenticating");
+    try {
+      let result: unknown;
+      if (capability === "health") {
+        result = await temperGateway.getHealth({ correlationId });
+      } else if (capability === "metadata" || capability === "allowed-entities") {
+        activity.markTemper(sessionId, "reading");
+        result = await temperGateway.listAllowedEntities({ correlationId });
+      } else {
+        const entityType = stringField(body, "entityType", 40);
+        const entityId = stringField(body, "entityId", 128);
+        if (
+          !entityType ||
+          !entityId ||
+          !(TEMPER_ALLOWED_ENTITY_TYPES as readonly string[]).includes(entityType)
+        )
+          throw Object.assign(
+            new Error("A valid allowlisted entityType and entityId are required"),
+            { status: 400 },
+          );
+        activity.markTemper(sessionId, "reading");
+        result = await temperGateway.readEntity(entityType as TemperAllowedEntityType, entityId, {
+          correlationId,
+        });
+      }
+      const principal =
+        isObject(result) && typeof result.principal === "string" ? result.principal : undefined;
+      activity.markTemper(sessionId, "succeeded", principal);
+      const trace = activity.finishTemper(sessionId, "succeeded", {
+        principal,
+        result:
+          capability === "read-entity"
+            ? `read ${(result as { entityType: string }).entityType} ${(result as { entityId: string }).entityId}`
+            : capability === "allowed-entities"
+              ? `listed ${((result as { entityTypes?: unknown[] }).entityTypes ?? []).length} allowlisted types`
+              : capability,
+      });
+      if (trace) await store.appendUnlocked(sessionId, [{ type: "temper.trace", trace }]);
+      return result;
+    } catch (error) {
+      const gatewayError = error instanceof TemperGatewayError ? error : undefined;
+      const denied =
+        gatewayError?.code === "auth-invalid" ||
+        gatewayError?.code === "auth-missing" ||
+        gatewayError?.code === "wrong-tenant" ||
+        gatewayError?.code === "denied";
+      const trace = activity.finishTemper(sessionId, denied ? "denied" : "failed", {
+        error: {
+          code: gatewayError?.code ?? "failed",
+          message: error instanceof Error ? error.message : "Temper capability failed",
+          ...(gatewayError?.status ? { status: gatewayError.status } : {}),
+        },
+      });
+      if (trace)
+        await store.appendUnlocked(sessionId, [{ type: "temper.trace", trace }]).catch(() => {});
+      throw error;
+    }
+  };
+
   const server = createServer(async (request, response) => {
     try {
       if (!originAllowed(request, options, actualPort))
@@ -416,6 +499,9 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           proxyBaseUrl: provider.baseUrl,
           proxyConfigured: provider.configured,
           caseFiling: "pending-only",
+          temperRead: "host-controlled-read-only",
+          temperTenant: TEMPER_TENANT,
+          temperEntityTypes: TEMPER_ALLOWED_ENTITY_TYPES,
           agent: runtimeConfig.name,
           configVersion: runtimeConfig.version,
         });
@@ -451,10 +537,19 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         if (!state) return json(response, 404, { error: "Session not found" });
         return json(response, 200, {
           active: activity.snapshot(sessionId),
+          activeTemper: activity.snapshotTemper(sessionId),
           recent: state.traces.slice(-12).reverse(),
+          recentTemper: state.temperTraces.slice(-12).reverse(),
           serverUptimeSeconds: Math.floor(process.uptime()),
-          agentState: activity.snapshot(sessionId)?.stage ?? "idle",
+          agentState:
+            activity.snapshot(sessionId)?.stage ??
+            activity.snapshotTemper(sessionId)?.state ??
+            "idle",
         });
+      }
+      if (request.method === "POST" && parts.length === 4 && parts[3] === "temper") {
+        const result = await handleTemperCapability(request, sessionId);
+        return json(response, 200, { status: "succeeded", result });
       }
       if (request.method === "GET" && parts.length === 4 && parts[3] === "config") {
         return json(response, 200, {
@@ -525,6 +620,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
     server,
     store,
     provider,
+    temperGateway,
     address: () => (actualPort ? { host, port: actualPort } : null),
   };
 }

@@ -66,6 +66,37 @@ The route calls `createGatedTurnHost` before the provider. Triggered punctuation
 
 Session files are append-only JSONL with a hash chain, contiguous sequence numbers, atomic rewrite/rename, and per-session in-process serialization. Reopening the store validates the chain and fails closed on corruption. This is a single-process local pilot, not a multi-process transaction store or a deployed service.
 
+## Temper read-only capability (#394)
+
+The host includes a bounded `TemperGateway` for the existing Mac Temper kernel. It is fixed to tenant `incident-rca`, resolves the dedicated nonhuman `stately` principal through the existing ES256 trusted issuer, and exposes only these host-controlled capabilities:
+
+- `health`
+- `metadata` / `allowed-entities` (allowlisted `Incident`, `Remediation`, `Postmortem` types)
+- `read-entity` for one explicitly allowlisted entity type and validated ID
+
+The model receives no arbitrary HTTP client, bearer token, tenant selector, Temper action method, or approval/rejection capability. The authenticated session UI exposes the read panel at `POST /api/sessions/:sessionId/temper`; activity readback records `requested → authenticating → reading → succeeded|denied|failed`, duration, tenant, nonsecret principal, sanitized result/error and correlation ID. Entity response contents are returned only to the authenticated read request, never to telemetry traces.
+
+The protected runtime identity file is outside Git at `~/.config/stately-temper/temper.jwt` (directory mode `0700`, file mode `0600`). It is a short-lived issuer JWT for `client_id=stately`, `agent_type=stately`; the existing local issuer is used and no private key is copied. The current LaunchAgent configuration was not changed by this source work. For an ephemeral local verification process:
+
+```sh
+umask 077
+mkdir -p ~/.config/stately-temper
+python3 /Users/bencharney/temper-server/mint_token.py stately stately --days 1 > ~/.config/stately-temper/temper.jwt
+chmod 700 ~/.config/stately-temper
+chmod 600 ~/.config/stately-temper/temper.jwt
+STATELY_PORT=8788 \\
+STATELY_TEMPER_TOKEN_FILE="$HOME/.config/stately-temper/temper.jwt" \\
+  pnpm exec tsx examples/adaptive-harness/app/server.ts
+```
+
+Safe Temper environment names:
+
+- `STATELY_TEMPER_BASE_URL` — defaults to `http://127.0.0.1:3000`.
+- `STATELY_TEMPER_TOKEN_FILE` — protected local JWT path; the token value is never logged or returned.
+- `STATELY_TEMPER_PRINCIPAL` — defaults to `stately`; source/runtime policy must not point this at `astro`, `ben`, `supervisor`, or `operator`.
+
+A protected gateway request sends `Authorization: Bearer <JWT>` and `X-Tenant-Id: incident-rca`. Missing, invalid/expired, wrong-tenant, forbidden, timeout and upstream failures become structured sanitized errors. Strict Cedar hardening to forbid all direct create/write operations for the `stately` JWT identity is a separate Temper policy change; no such policy mutation is performed by this candidate.
+
 ## Verification limits
 
 The Mac CLIProxyAPI integration uses the existing OpenAI-compatible Chat Completions adapter and direct model id `gpt-5.6-luna`. A live probe must verify the local listener and authenticated request before claiming model connectivity. The repository does not configure Tailscale or launchd itself; the separately authorized Mac runtime currently uses LaunchAgent and private Tailscale Serve. Any mobile exposure must remain private tailnet-only; no Funnel/public exposure is supported. No production GitHub case filing is enabled.

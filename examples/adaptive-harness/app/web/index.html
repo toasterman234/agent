@@ -39,6 +39,34 @@
         gap: 0.75rem;
         overflow: auto;
       }
+      #temper-capability {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #303746;
+        background: #141b26;
+      }
+      .capability-heading {
+        display: flex;
+        gap: 0.6rem;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 0.55rem;
+      }
+      #temper-capability select,
+      #temper-capability input {
+        min-width: 0;
+        flex: 1;
+        background: #1b202b;
+        color: inherit;
+      }
+      #temper-result {
+        margin: 0.6rem 0 0;
+        max-height: 180px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: #aeb8ca;
+        font-size: 0.75rem;
+      }
       .message,
       .review {
         padding: 0.75rem 1rem;
@@ -242,6 +270,35 @@
           <ol id="activity-steps"></ol>
         </details>
       </section>
+      <section id="temper-capability" aria-label="Temper read capability">
+        <div class="capability-heading">
+          <strong>Temper · read-only</strong>
+          <small id="temper-capability-status"
+            >Host-controlled capability · tenant incident-rca</small
+          >
+        </div>
+        <form id="temper-form">
+          <select id="temper-capability-select" aria-label="Temper capability">
+            <option value="health">Health</option>
+            <option value="metadata">Metadata</option>
+            <option value="allowed-entities">Allowed entity types</option>
+            <option value="read-entity">Read entity</option>
+          </select>
+          <select id="temper-entity-type" aria-label="Temper entity type" hidden>
+            <option value="Incident">Incident</option>
+            <option value="Remediation">Remediation</option>
+            <option value="Postmortem">Postmortem</option>
+          </select>
+          <input
+            id="temper-entity-id"
+            aria-label="Temper entity id"
+            placeholder="Entity id"
+            hidden
+          />
+          <button id="temper-read" type="submit">Read</button>
+        </form>
+        <pre id="temper-result" aria-live="polite">No Temper read yet.</pre>
+      </section>
       <section id="messages" aria-live="polite"></section>
       <footer>
         <form id="chat">
@@ -265,6 +322,13 @@
       const activityMeta = document.querySelector("#activity-meta");
       const activitySteps = document.querySelector("#activity-steps");
       const sendButton = document.querySelector("#send-button");
+      const temperForm = document.querySelector("#temper-form");
+      const temperCapability = document.querySelector("#temper-capability-select");
+      const temperEntityType = document.querySelector("#temper-entity-type");
+      const temperEntityId = document.querySelector("#temper-entity-id");
+      const temperRead = document.querySelector("#temper-read");
+      const temperStatus = document.querySelector("#temper-capability-status");
+      const temperResult = document.querySelector("#temper-result");
       const stageLabels = {
         received: "Received message",
         "checking-feedback": "Checking feedback rules",
@@ -277,6 +341,24 @@
       };
       let activityPoll;
       let sending = false;
+      const temperStates = {
+        requested: "Requested",
+        authenticating: "Authenticating",
+        reading: "Reading",
+        succeeded: "Succeeded",
+        denied: "Denied",
+        failed: "Failed",
+      };
+      function updateTemperActivity(data) {
+        const trace = data.activeTemper ?? data.recentTemper?.[0];
+        if (!trace) return;
+        const state = temperStates[trace.state] ?? trace.state;
+        const states = (trace.steps ?? [])
+          .map((step) => temperStates[step.state] ?? step.state)
+          .join(" → ");
+        temperStatus.textContent = `${states || state} · ${trace.tenant} · ${trace.principal ?? "principal resolving"} · ${trace.correlationId} · ${seconds(trace.durationMs)}`;
+        if (trace.error) temperResult.textContent = `${trace.error.code}: ${trace.error.message}`;
+      }
       const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
       function renderActivity(data) {
         const active = data.active;
@@ -307,6 +389,7 @@
             : "";
         activityMeta.textContent = `${elapsed} · ${trace?.model ?? "No active turn"}${usage}${sinceChange} · server up ${data.serverUptimeSeconds}s`;
         activitySteps.replaceChildren();
+        updateTemperActivity(data);
         for (const step of trace?.steps ?? []) {
           const line = document.createElement("li");
           line.textContent = `${seconds(step.elapsedMs)} · ${stageLabels[step.stage] ?? step.stage}`;
@@ -397,6 +480,45 @@
           }
         }
       };
+      temperCapability.onchange = () => {
+        const needsEntity = temperCapability.value === "read-entity";
+        temperEntityType.hidden = !needsEntity;
+        temperEntityId.hidden = !needsEntity;
+        temperEntityId.required = needsEntity;
+      };
+      temperForm.onsubmit = async (event) => {
+        event.preventDefault();
+        if (!session || temperRead.disabled) return;
+        temperRead.disabled = true;
+        temperStatus.textContent = "Requested · incident-rca · authenticating";
+        temperResult.textContent = "Reading Temper…";
+        try {
+          const body = { capability: temperCapability.value };
+          if (temperCapability.value === "read-entity") {
+            body.entityType = temperEntityType.value;
+            body.entityId = temperEntityId.value.trim();
+          }
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/temper`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            },
+          );
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error ?? "Temper read failed");
+          const result = data.result;
+          temperStatus.textContent = `Succeeded · ${result.tenant} · ${result.principal} · ${result.correlationId}`;
+          temperResult.textContent = JSON.stringify(result.entity ?? result, null, 2);
+          await refreshActivity();
+        } catch (error) {
+          temperStatus.textContent = `Failed · incident-rca`;
+          temperResult.textContent = error.message;
+        } finally {
+          temperRead.disabled = false;
+        }
+      };
       async function showRuntimeConfig() {
         const response = await fetch(
           `/api/sessions/${encodeURIComponent(session.sessionId)}/config`,
@@ -452,7 +574,7 @@
       async function start() {
         const response = await fetch("/api/sessions", { method: "POST" });
         session = await response.json();
-        status.textContent = `Session ${session.sessionId} · pending-only case review`;
+        status.textContent = `Session ${session.sessionId} · pending-only case review · Temper read-only`;
         render(session);
         await refreshActivity();
       }

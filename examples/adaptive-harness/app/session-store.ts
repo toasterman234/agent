@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { TurnTrace } from "./activity.js";
+import type { TemperCapabilityTrace, TurnTrace } from "./activity.js";
 
 export type SessionMessage = {
   messageId: string;
@@ -25,7 +25,8 @@ export type SessionEvent =
   | { type: "message.user"; message: SessionMessage }
   | { type: "message.assistant"; message: SessionMessage }
   | { type: "feedback.updated"; feedback: SessionFeedback }
-  | { type: "turn.trace"; trace: TurnTrace };
+  | { type: "turn.trace"; trace: TurnTrace }
+  | { type: "temper.trace"; trace: TemperCapabilityTrace };
 
 type StoredEvent = {
   schemaVersion: 1;
@@ -41,6 +42,7 @@ export type SessionState = {
   messages: SessionMessage[];
   feedback: SessionFeedback[];
   traces: TurnTrace[];
+  temperTraces: TemperCapabilityTrace[];
   eventCount: number;
   lastHash: string | null;
 };
@@ -98,6 +100,21 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
       throw new Error("Invalid turn trace");
     return { ...state, traces: [...state.traces, trace].slice(-30) };
   }
+  if (event.type === "temper.trace") {
+    const trace = event.trace;
+    if (
+      !trace ||
+      typeof trace.capability !== "string" ||
+      typeof trace.tenant !== "string" ||
+      typeof trace.state !== "string" ||
+      typeof trace.correlationId !== "string" ||
+      typeof trace.durationMs !== "number" ||
+      !Array.isArray(trace.steps)
+    ) {
+      throw new Error("Invalid Temper capability trace");
+    }
+    return { ...state, temperTraces: [...state.temperTraces, trace].slice(-30) };
+  }
   if (event.type === "feedback.updated") {
     const existing = state.feedback.find((item) => item.messageId === event.feedback.messageId);
     if (existing && JSON.stringify(existing) !== JSON.stringify(event.feedback)) {
@@ -126,6 +143,7 @@ function emptyState(sessionId = ""): SessionState {
     messages: [],
     feedback: [],
     traces: [],
+    temperTraces: [],
     eventCount: 0,
     lastHash: null,
   };
@@ -217,7 +235,8 @@ export class SessionStore {
         event.type !== "message.user" &&
         event.type !== "message.assistant" &&
         event.type !== "feedback.updated" &&
-        event.type !== "turn.trace"
+        event.type !== "turn.trace" &&
+        event.type !== "temper.trace"
       ) {
         throw new Error("Unsupported session event");
       }

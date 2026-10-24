@@ -6,6 +6,7 @@ import { startAdaptiveServer } from "../server.js";
 import { SessionStore } from "../session-store.js";
 import type { ChatProvider } from "../proxy-provider.js";
 import type { FeedbackJudge } from "../../feedback-trigger/host.js";
+import { TemperGateway } from "../temper-gateway.js";
 
 const apps: Array<{ close: () => Promise<void> }> = [];
 const close = (server: { close(callback: (error?: Error) => void): void }) =>
@@ -14,7 +15,12 @@ const close = (server: { close(callback: (error?: Error) => void): void }) =>
   );
 
 async function appWith(
-  fixture: { judge?: FeedbackJudge; provider?: ChatProvider; allowedOrigin?: string } = {},
+  fixture: {
+    judge?: FeedbackJudge;
+    provider?: ChatProvider;
+    allowedOrigin?: string;
+    temperGateway?: TemperGateway;
+  } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), "stately-app-"));
   const provider =
@@ -33,6 +39,7 @@ async function appWith(
     provider,
     judge: fixture.judge,
     allowedOrigin: fixture.allowedOrigin,
+    temperGateway: fixture.temperGateway,
   });
   apps.push({ close: () => close(app.server) });
   return { app, directory, provider };
@@ -181,6 +188,63 @@ describe("standalone adaptive harness", () => {
       headers: { origin: "https://other.example" },
     });
     expect(rejected.status).toBe(403);
+  });
+
+  test("exposes only the bounded Temper read capability and persists sanitized traces", async () => {
+    const temperGateway = new TemperGateway({
+      readToken: async () => "test-jwt",
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.endsWith("/api/identity/resolve"))
+          return new Response(
+            JSON.stringify({
+              agent_instance_id: "stately",
+              agent_type_name: "stately",
+              verified: true,
+            }),
+            { status: 200 },
+          );
+        if (url.endsWith("/$metadata"))
+          return new Response(
+            '<Schema><EntityType Name="Incident"/><EntityType Name="Remediation"/></Schema>',
+            { status: 200 },
+          );
+        return new Response(JSON.stringify({ entity_id: "inc-1", status: "Investigating" }), {
+          status: 200,
+        });
+      },
+    });
+    const { app } = await appWith({ temperGateway });
+    const { session: created, cookie } = await session(app);
+    const metadata = await post(app, cookie, `/api/sessions/${created.sessionId}/temper`, {
+      capability: "metadata",
+    });
+    expect(metadata.status).toBe(200);
+    expect((await metadata.json()).result.entityTypes).toEqual(["Incident", "Remediation"]);
+    const entity = await post(app, cookie, `/api/sessions/${created.sessionId}/temper`, {
+      capability: "read-entity",
+      entityType: "Incident",
+      entityId: "inc-1",
+    });
+    expect(entity.status).toBe(200);
+    expect((await entity.json()).result.entity.entity_id).toBe("inc-1");
+    const activity = await fetch(
+      `http://${app.address()!.host}:${app.address()!.port}/api/sessions/${created.sessionId}/activity`,
+      { headers: { cookie } },
+    ).then((response) => response.json());
+    expect(activity.recentTemper[0]).toMatchObject({
+      capability: "read-entity",
+      tenant: "incident-rca",
+      principal: "stately",
+      state: "succeeded",
+    });
+    expect(activity.recentTemper[0].steps.map((step: { state: string }) => step.state)).toEqual([
+      "requested",
+      "authenticating",
+      "reading",
+      "succeeded",
+    ]);
+    expect(activity.recentTemper[0].error).toBeUndefined();
   });
 
   test("does not allow a token from another session to read or post", async () => {
