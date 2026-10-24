@@ -96,8 +96,13 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
   }
   if (event.type === "behavior.selected") {
     const selected = event.selection;
-    if (!selected || typeof selected.messageId !== "string" ||
-        !["continue-work", "revise-work", "verification", "status-check", "conversation"].includes(selected.behaviorId))
+    if (
+      !selected ||
+      typeof selected.messageId !== "string" ||
+      !["continue-work", "revise-work", "verification", "status-check", "conversation"].includes(
+        selected.behaviorId,
+      )
+    )
       throw new Error("Invalid behavior selection");
     return { ...state, behavior: selected };
   }
