@@ -19,13 +19,15 @@ Missing or invalid runtime files prevent startup rather than silently falling ba
 
 ## Current verified status — 2026-10-24
 
-- Branch: `work/388-feedback-trigger-scaffold`; latest commit: `3fca8d973e6fd8ea759704c6b89d00bc5703f6e2`.
+- Branch: `work/388-feedback-trigger-scaffold`; deployed code commit: `731a648a6dc5198e330914388d2b30d292ef5cfe`.
 - Provider: the Mac-local CLIProxyAPI is serving authenticated `gpt-5.6-luna` Chat Completions through `127.0.0.1:8317`.
-- Verification: focused harness tests 32/32, examples typecheck, scoped lint, formatting, full local CI-equivalent checks, and GitHub Actions run `40063534289` passed.
+- Verification: focused harness tests 32/32; the activity implementation's GitHub Actions run `40066133762` passed with 1,649 total tests; examples typecheck, scoped lint, formatting, and prior full local CI-equivalent checks passed.
 - Activation: LaunchAgent `com.bencharney.stately-adaptive-harness` runs the service on `127.0.0.1:8787` with runtime-only `0600` configuration outside the repository.
 - Private mobile access: Tailscale Serve maps `https://bens-mac-mini.taila1553c.ts.net:8787/` to the loopback service, tailnet-only. No Funnel route was added for this service. The HTTPS health/UI, origin enforcement, two-turn context, feedback dismissal, persistence, and restart recovery were verified from the Mac over the tailnet URL.
-- Current limitation: the normal chat context has no identity system prompt yet. The UI calls the service the “Stately adaptive harness,” but the model may identify itself as ChatGPT. Adding an explicit Stately identity prompt is the next product change.
+- Runtime identity: the service now loads source-controlled Stately identity, policy, behavior, and prompt-only skill files at startup. The identity/config version is visible through the authenticated config panel/API; changes require a service restart.
+- Live activity: the mobile UI now reports host-observed receipt, feedback checking/judgment, Luna call, persistence, completion, blocked, and failure stages with elapsed timing and expandable traces. It does not expose model reasoning.
 - Case filing: `File case` remains pending-only because no verified runtime adapter for governed intake #76 is enabled. The observed blocker-reporting recurrence was linked to existing Case #80 rather than duplicated.
+- Mac deployment: commit `731a648` was fast-forwarded into the Mac checkout and deployed by restarting `com.bencharney.stately-adaptive-harness`; health, config, activity polling, real Luna response, feedback judgment, and the existing HTTPS Tailscale route were read back successfully.
 
 ## Run locally
 

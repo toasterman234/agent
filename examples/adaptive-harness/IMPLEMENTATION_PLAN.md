@@ -7,17 +7,19 @@
 ## Current implementation receipt — 2026-10-24
 
 - Added the standalone `app/` host, responsive UI, persistent hash-chained session log, XState conversation machine, strict feedback judge, CLIProxyAPI adapter, smoke check, origin allowlist, LaunchAgent recipe, and pending-only case seam.
-- Latest branch commit: `3fca8d973e6fd8ea759704c6b89d00bc5703f6e2` on `work/388-feedback-trigger-scaffold`; draft PR [#1](https://github.com/toasterman234/agent/pull/1) remains open and unmerged.
-- Verification passed: focused harness tests 32/32; examples typecheck; scoped lint; formatting; full local CI-equivalent checks; and GitHub Actions run [40063534289](https://github.com/toasterman234/agent/actions/runs/40063534289) with its `test` check.
+- Latest deployed code commit: `731a648a6dc5198e330914388d2b30d292ef5cfe` on `work/388-feedback-trigger-scaffold`; draft PR [#1](https://github.com/toasterman234/agent/pull/1) remains open and unmerged.
+- Verification passed: focused harness tests 32/32; the activity implementation's GitHub Actions run [40066133762](https://github.com/toasterman234/agent/actions/runs/40066133762) passed with 1,649 total tests; examples typecheck, scoped lint, formatting, and prior full local CI-equivalent checks passed.
 - Live Mac readback: authenticated bounded Chat Completions returned HTTP 200 with response model `gpt-5.6-luna`; the real harness smoke verified two-turn recall, duplicate completion handling, punctuation feedback dismissal, recovery, persistence, and restart readback. No credential was committed, printed, or logged.
 - Activation: LaunchAgent `com.bencharney.stately-adaptive-harness` runs the service on `127.0.0.1:8787` with runtime-only configuration outside the repository. Restart and health readback passed.
 - Mobile: Tailscale Serve maps `https://bens-mac-mini.taila1553c.ts.net:8787/` to the loopback service, tailnet-only. The configured origin returned HTTP 200, an unrelated origin returned HTTP 403, and the HTTPS health/UI and full chat smoke passed. No Funnel route was added for this service.
-- Identity limitation: the normal provider context currently has no identity system prompt. The UI identifies the service as the Stately adaptive harness, but the model may answer “I’m ChatGPT.” Add an explicit Stately identity prompt before treating self-identification as complete.
+- Runtime identity: the service now loads source-controlled Stately identity, policy, behavior, and prompt-only skill files at startup and passes them as a system message to normal Luna turns. The authenticated config panel/API exposes the nonsecret config version and capability declarations.
+- Live activity: the mobile UI reports host-observed receipt, feedback checking/judgment, Luna call, persistence, completion, blocked, and failure stages with elapsed timing and expandable persisted traces. It does not expose model reasoning.
 - Case filing: `File case` remains pending-only because no verified runtime adapter for governed intake #76 is enabled. The blocker-reporting recurrence was linked to existing Case #80 (`6379941895`) and referenced from #76 (`6379942028`); no duplicate case was created.
+- Mac deployment: commit `731a648` was fast-forwarded into the Mac checkout and deployed by restarting `com.bencharney.stately-adaptive-harness`; health, config, activity polling, real Luna response, feedback judgment, and the existing HTTPS Tailscale route were read back successfully.
 
 ### Where we are now
 
-The private local/mobile pilot is operational and verified, but it is still a candidate harness rather than a production deployment. The next implementation slice is the explicit identity/system prompt, followed by a focused regression test and a fresh mobile smoke. Production case filing remains intentionally fail-closed until an authorized adapter and independent readback exist.
+The private local/mobile pilot is operational and verified, but it is still a candidate harness rather than a production deployment. The next product work is continued identity/skill UX refinement and any additional mobile polish. Production case filing remains intentionally fail-closed until an authorized adapter and independent readback exist.
 
 ## Selected decisions (supersede prior Cloudflare-host assessment)
 
