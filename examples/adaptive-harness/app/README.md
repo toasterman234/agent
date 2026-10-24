@@ -2,6 +2,16 @@
 
 This is a candidate, single-process Node host for the existing feedback-trigger scaffold. It binds to loopback by default, persists sessions and feedback outside the repository, and keeps production GitHub case filing pending-only.
 
+## Current verified status — 2026-10-24
+
+- Branch: `work/388-feedback-trigger-scaffold`; latest commit: `3fca8d973e6fd8ea759704c6b89d00bc5703f6e2`.
+- Provider: the Mac-local CLIProxyAPI is serving authenticated `gpt-5.6-luna` Chat Completions through `127.0.0.1:8317`.
+- Verification: focused harness tests 32/32, examples typecheck, scoped lint, formatting, full local CI-equivalent checks, and GitHub Actions run `40063534289` passed.
+- Activation: LaunchAgent `com.bencharney.stately-adaptive-harness` runs the service on `127.0.0.1:8787` with runtime-only `0600` configuration outside the repository.
+- Private mobile access: Tailscale Serve maps `https://bens-mac-mini.taila1553c.ts.net:8787/` to the loopback service, tailnet-only. No Funnel route was added for this service. The HTTPS health/UI, origin enforcement, two-turn context, feedback dismissal, persistence, and restart recovery were verified from the Mac over the tailnet URL.
+- Current limitation: the normal chat context has no identity system prompt yet. The UI calls the service the “Stately adaptive harness,” but the model may identify itself as ChatGPT. Adding an explicit Stately identity prompt is the next product change.
+- Case filing: `File case` remains pending-only because no verified runtime adapter for governed intake #76 is enabled. The observed blocker-reporting recurrence was linked to existing Case #80 rather than duplicated.
+
 ## Run locally
 
 From the repository root:
@@ -33,4 +43,4 @@ Session files are append-only JSONL with a hash chain, contiguous sequence numbe
 
 ## Verification limits
 
-The Mac CLIProxyAPI integration uses the existing OpenAI-compatible Chat Completions adapter and direct model id `gpt-5.6-luna`. A live probe must verify the local listener and authenticated request before claiming model connectivity. The source-only harness does not configure Tailscale or launchd itself. A separately authorized local LaunchAgent may run it, but any mobile exposure must remain private tailnet-only; no Funnel/public exposure is supported. No production GitHub case filing is enabled.
+The Mac CLIProxyAPI integration uses the existing OpenAI-compatible Chat Completions adapter and direct model id `gpt-5.6-luna`. A live probe must verify the local listener and authenticated request before claiming model connectivity. The repository does not configure Tailscale or launchd itself; the separately authorized Mac runtime currently uses LaunchAgent and private Tailscale Serve. Any mobile exposure must remain private tailnet-only; no Funnel/public exposure is supported. No production GitHub case filing is enabled.

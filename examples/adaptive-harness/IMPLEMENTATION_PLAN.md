@@ -4,12 +4,20 @@
 **Primary implementation:** [toasterman234/agent draft PR #1](https://github.com/toasterman234/agent/pull/1), `work/388-feedback-trigger-scaffold`.  
 **Source and behavior case:** [master-repo-0.1 #388](https://github.com/toasterman234/master-repo-0.1/issues/388), with [E36/#386](https://github.com/toasterman234/master-repo-0.1/issues/386), [E37/#387](https://github.com/toasterman234/master-repo-0.1/issues/387), and [Case intake #76](https://github.com/toasterman234/master-repo-0.1/issues/76).
 
-## Implementation receipt — 2026-10-24
+## Current implementation receipt — 2026-10-24
 
-- Added the standalone `app/` host, responsive UI, persistent hash-chained session log, XState conversation machine, strict feedback judge, CLIProxyAPI adapter, smoke check, and pending-only case seam.
-- Verified: focused feedback tests 28/28; app tests 3/3; examples typecheck exit 0; scoped lint exit 0 with 0 warnings; full lint exit 0 with 135 pre-existing warnings; format check exit 0; loopback `/healthz` smoke exit 0.
-- Live Mac readback: `127.0.0.1:8317` and `gpt-5.6-luna` appeared in `/v1/models`; the bounded Chat Completions probe returned HTTP 401 `Invalid API key`, so live model readiness remains blocked until the correct runtime API key is authorized. No credential was committed or printed.
-- Tailscale Serve was read-only; no routes changed. Production GitHub case filing remains disabled/pending-only. The draft PR remains unmerged and no persistent service was deployed.
+- Added the standalone `app/` host, responsive UI, persistent hash-chained session log, XState conversation machine, strict feedback judge, CLIProxyAPI adapter, smoke check, origin allowlist, LaunchAgent recipe, and pending-only case seam.
+- Latest branch commit: `3fca8d973e6fd8ea759704c6b89d00bc5703f6e2` on `work/388-feedback-trigger-scaffold`; draft PR [#1](https://github.com/toasterman234/agent/pull/1) remains open and unmerged.
+- Verification passed: focused harness tests 32/32; examples typecheck; scoped lint; formatting; full local CI-equivalent checks; and GitHub Actions run [40063534289](https://github.com/toasterman234/agent/actions/runs/40063534289) with its `test` check.
+- Live Mac readback: authenticated bounded Chat Completions returned HTTP 200 with response model `gpt-5.6-luna`; the real harness smoke verified two-turn recall, duplicate completion handling, punctuation feedback dismissal, recovery, persistence, and restart readback. No credential was committed, printed, or logged.
+- Activation: LaunchAgent `com.bencharney.stately-adaptive-harness` runs the service on `127.0.0.1:8787` with runtime-only configuration outside the repository. Restart and health readback passed.
+- Mobile: Tailscale Serve maps `https://bens-mac-mini.taila1553c.ts.net:8787/` to the loopback service, tailnet-only. The configured origin returned HTTP 200, an unrelated origin returned HTTP 403, and the HTTPS health/UI and full chat smoke passed. No Funnel route was added for this service.
+- Identity limitation: the normal provider context currently has no identity system prompt. The UI identifies the service as the Stately adaptive harness, but the model may answer “I’m ChatGPT.” Add an explicit Stately identity prompt before treating self-identification as complete.
+- Case filing: `File case` remains pending-only because no verified runtime adapter for governed intake #76 is enabled. The blocker-reporting recurrence was linked to existing Case #80 (`6379941895`) and referenced from #76 (`6379942028`); no duplicate case was created.
+
+### Where we are now
+
+The private local/mobile pilot is operational and verified, but it is still a candidate harness rather than a production deployment. The next implementation slice is the explicit identity/system prompt, followed by a focused regression test and a fresh mobile smoke. Production case filing remains intentionally fail-closed until an authorized adapter and independent readback exist.
 
 ## Selected decisions (supersede prior Cloudflare-host assessment)
 
@@ -98,6 +106,6 @@ examples/adaptive-harness/
 
 ## Definition of done
 
-Source compiled and PR reviewed; verified tests and at least one real Luna call; two-turn stateful chat; on-trigger verdict and durable disposition; approved case filing with readback **or explicitly limited pending-review mode**; private iPhone/desktop connectivity; restart survives with no lost/duplicate processing; authorized activation receipt and rollback documented. Without the last steps the status is **candidate, not live**.
+Source compiled and PR remains in review; verified tests and at least one real Luna call; two-turn stateful chat; on-trigger verdict and durable disposition; explicitly limited pending-review mode; private iPhone/desktop connectivity; restart survives with no lost/duplicate processing; and authorized activation receipt with rollback documented. The service is a verified private pilot, not a production deployment. The remaining product gap is the explicit identity/system prompt; case filing remains fail-closed pending a verified adapter and readback.
 
 Historical issue #388 A/B/C Muse integration remains a separate Explore, not automatically satisfied by the standalone harness.
