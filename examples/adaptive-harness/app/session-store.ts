@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { TurnTrace } from "./activity.js";
 
 export type SessionMessage = {
   messageId: string;
@@ -23,7 +24,8 @@ export type SessionEvent =
   | { type: "session.created"; sessionId: string; createdAt: string }
   | { type: "message.user"; message: SessionMessage }
   | { type: "message.assistant"; message: SessionMessage }
-  | { type: "feedback.updated"; feedback: SessionFeedback };
+  | { type: "feedback.updated"; feedback: SessionFeedback }
+  | { type: "turn.trace"; trace: TurnTrace };
 
 type StoredEvent = {
   schemaVersion: 1;
@@ -38,6 +40,7 @@ export type SessionState = {
   createdAt: string;
   messages: SessionMessage[];
   feedback: SessionFeedback[];
+  traces: TurnTrace[];
   eventCount: number;
   lastHash: string | null;
 };
@@ -88,6 +91,13 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
     }
     return { ...state, messages: [...state.messages, event.message] };
   }
+  if (event.type === "turn.trace") {
+    // Traces never contain model prompts, completions, secrets or raw error strings.
+    const trace = event.trace;
+    if (!trace || typeof trace.messageId !== "string" || !Array.isArray(trace.steps))
+      throw new Error("Invalid turn trace");
+    return { ...state, traces: [...state.traces, trace].slice(-30) };
+  }
   if (event.type === "feedback.updated") {
     const existing = state.feedback.find((item) => item.messageId === event.feedback.messageId);
     if (existing && JSON.stringify(existing) !== JSON.stringify(event.feedback)) {
@@ -110,7 +120,7 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
 }
 
 function emptyState(sessionId = ""): SessionState {
-  return { sessionId, createdAt: "", messages: [], feedback: [], eventCount: 0, lastHash: null };
+  return { sessionId, createdAt: "", messages: [], feedback: [], traces: [], eventCount: 0, lastHash: null };
 }
 
 export class SessionStore {
@@ -198,7 +208,8 @@ export class SessionStore {
         event.type !== "session.created" &&
         event.type !== "message.user" &&
         event.type !== "message.assistant" &&
-        event.type !== "feedback.updated"
+        event.type !== "feedback.updated" &&
+        event.type !== "turn.trace"
       ) {
         throw new Error("Unsupported session event");
       }
