@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stately adaptive harness</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font:
+          16px/1.45 system-ui,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #10131a;
+        color: #f4f6fb;
+      }
+      main {
+        width: min(760px, 100%);
+        min-height: 100vh;
+        margin: auto;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+      }
+      header,
+      footer {
+        padding: 1rem;
+        border-bottom: 1px solid #303746;
+      }
+      footer {
+        border-top: 1px solid #303746;
+        border-bottom: 0;
+      }
+      #messages {
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        overflow: auto;
+      }
+      .message,
+      .review {
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+        white-space: pre-wrap;
+      }
+      .user {
+        align-self: end;
+        background: #315bb5;
+        max-width: 85%;
+      }
+      .assistant {
+        align-self: start;
+        background: #242b38;
+        max-width: 85%;
+      }
+      .review {
+        background: #4a3014;
+        border: 1px solid #bd7d2e;
+      }
+      form {
+        display: flex;
+        gap: 0.5rem;
+      }
+      input,
+      button {
+        font: inherit;
+        border-radius: 0.5rem;
+        border: 1px solid #58657c;
+        padding: 0.7rem;
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        background: #1b202b;
+        color: inherit;
+      }
+      button {
+        background: #315bb5;
+        color: white;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      small {
+        color: #aeb8ca;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>Stately adaptive harness</strong><br /><small id="status"
+          >Starting local session…</small
+        >
+      </header>
+      <section id="messages" aria-live="polite"></section>
+      <footer>
+        <form id="chat">
+          <input
+            id="input"
+            autocomplete="off"
+            placeholder="Message the local harness…"
+            required
+          /><button>Send</button>
+        </form>
+      </footer>
+    </main>
+    <script>
+      const messages = document.querySelector("#messages");
+      const status = document.querySelector("#status");
+      const input = document.querySelector("#input");
+      let session;
+      const add = (text, role) => {
+        const node = document.createElement("div");
+        node.className = `message ${role}`;
+        node.textContent = text;
+        messages.append(node);
+        messages.scrollTop = messages.scrollHeight;
+      };
+      const render = (data) => {
+        messages.replaceChildren();
+        for (const message of data.messages ?? []) add(message.text, message.role);
+        for (const feedback of data.feedback ?? []) {
+          if (feedback.status === "pending") {
+            const card = document.createElement("div");
+            card.className = "review";
+            card.innerHTML = `<strong>Feedback review pending</strong><br>${feedback.reason}<br><small>Case filing is unavailable in this candidate harness.</small>`;
+            const dismiss = document.createElement("button");
+            dismiss.textContent = "Dismiss with reason";
+            dismiss.onclick = async () => {
+              const reason = window.prompt("Reason for dismissal?");
+              if (!reason) return;
+              const response = await fetch(
+                `/api/sessions/${encodeURIComponent(session.sessionId)}/feedback/${encodeURIComponent(feedback.messageId)}/disposition`,
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ action: "dismiss", reason }),
+                },
+              );
+              const result = await response.json();
+              if (!response.ok) return alert(result.error ?? "Dismissal failed");
+              render(result.session);
+            };
+            const file = document.createElement("button");
+            file.textContent = "File case (unavailable)";
+            file.disabled = true;
+            card.append(dismiss, file);
+            messages.append(card);
+          }
+        }
+      };
+      async function start() {
+        const response = await fetch("/api/sessions", { method: "POST" });
+        session = await response.json();
+        status.textContent = `Session ${session.sessionId} · pending-only case review`;
+        render(session);
+      }
+      document.querySelector("#chat").onsubmit = async (event) => {
+        event.preventDefault();
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = "";
+        add(text, "user");
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(session.sessionId)}/messages`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ messageId: crypto.randomUUID(), text }),
+          },
+        );
+        const result = await response.json();
+        if (result.status === "blocked") {
+          render(result.session);
+          return;
+        }
+        if (!response.ok) {
+          add(result.error ?? "Request failed", "assistant");
+          return;
+        }
+        if (result.text) add(result.text, "assistant");
+        render(result.session);
+      };
+      start().catch((error) => {
+        status.textContent = `Unable to start: ${error.message}`;
+      });
+    </script>
+  </body>
+</html>

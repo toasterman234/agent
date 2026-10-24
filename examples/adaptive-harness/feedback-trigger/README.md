@@ -32,10 +32,7 @@ const judge = { evaluate: async ({ message, signal }) => yourFeedbackJudge(messa
 // fileOrLink({ idempotencyKey, ... }) -> { ref }; verify(ref) -> boolean.
 const caseSink = yourAuthorizedCaseSink;
 
-const onIncomingMessage = createGatedTurnHost(
-  { judge, journal, caseSink },
-  runNormalAgentTurn,
-);
+const onIncomingMessage = createGatedTurnHost({ judge, journal, caseSink }, runNormalAgentTurn);
 // Expose onIncomingMessage as the ONLY public ingress. When blocked, the
 // result is { kind: "blocked", feedback: ... } and normalTurn was not called.
 ```
@@ -46,7 +43,7 @@ The snippet is **integration pseudocode**: `yourFeedbackJudge`, `yourAuthorizedC
 
 `FileDispositionJournal` stores JSON per (sessionId, messageId), with the message text SHA-256. It uses per-key exclusive directory locks and atomic rename for local single-host access, then reads the record back. It preserves final dispositions and allows retrying a pending one. An existing lock or malformed journal entry **fails closed**, requiring investigation; don't delete a lock without checking whether its writer is active. The example is not a database, distributed lease service, fsync-backed transaction manager, or evidence of multi-host reliability.
 
-The *Case sink itself* must guarantee idempotent `fileOrLink` by the provided key, because process death after remote filing but before journal commit could otherwise create duplicate cases. Search open/closed/superseded history and preserve recurrence links per #76. Merely recording a `filed` status locally is not enough; the sink's `verify(ref)` reads the authoritative record. If no sink is provided, the trigger is not yet an active case-filing capability.
+The _Case sink itself_ must guarantee idempotent `fileOrLink` by the provided key, because process death after remote filing but before journal commit could otherwise create duplicate cases. Search open/closed/superseded history and preserve recurrence links per #76. Merely recording a `filed` status locally is not enough; the sink's `verify(ref)` reads the authoritative record. If no sink is provided, the trigger is not yet an active case-filing capability.
 
 ## Run tests
 

@@ -31,9 +31,7 @@ describe("feedback signal nomination — #388", () => {
     (input) => expect(detectFeedbackSignal(input)).toBeNull(),
   );
   test("quoting punctuation nominates, not automatically files", () => {
-    expect(detectFeedbackSignal("For example, `???` is a trigger")?.kind).toBe(
-      "punctuation-burst",
-    );
+    expect(detectFeedbackSignal("For example, `???` is a trigger")?.kind).toBe("punctuation-burst");
   });
 });
 
@@ -96,9 +94,7 @@ describe("host-gated feedback with file-backed journal", () => {
       status: "dismissed",
       disposition: { status: "dismissed", messageId: "quoted" },
     });
-    expect((await journal.read(dispositionKey("session-1", "quoted")))?.reason).toContain(
-      "Quoted",
-    );
+    expect((await journal.read(dispositionKey("session-1", "quoted")))?.reason).toContain("Quoted");
     const second = await gateInboundFeedback(msg, deps);
     expect(second).toEqual(first);
     expect(evaluate).toHaveBeenCalledTimes(1);
@@ -177,7 +173,11 @@ describe("host-gated feedback with file-backed journal", () => {
   test("judge errors block and persist a pending disposition", async () => {
     const msg = message("!!?", "judge-outage");
     const first = await gateInboundFeedback(msg, {
-      judge: { evaluate: async () => { throw new Error("down"); } },
+      judge: {
+        evaluate: async () => {
+          throw new Error("down");
+        },
+      },
       journal,
     });
     expect(first).toMatchObject({ replyAllowed: false, status: "blocked" });
@@ -193,8 +193,12 @@ describe("host-gated feedback with file-backed journal", () => {
 
   test("journal read errors fail closed, not like a new message", async () => {
     const badJournal: DispositionJournal = {
-      read: async () => { throw new Error("disk unavailable"); },
-      save: async () => { throw new Error("disk unavailable"); },
+      read: async () => {
+        throw new Error("disk unavailable");
+      },
+      save: async () => {
+        throw new Error("disk unavailable");
+      },
     };
     const result = await gateInboundFeedback(message("???"), {
       judge: { evaluate: async () => ({ kind: "dismiss", reason: "example" }) },
@@ -226,15 +230,18 @@ describe("host-gated feedback with file-backed journal", () => {
       journal,
     });
     const other = new FileDispositionJournal(root);
-    expect((await other.read(dispositionKey("session-1", "restart")))?.status).toBe(
-      "dismissed",
-    );
+    expect((await other.read(dispositionKey("session-1", "restart")))?.status).toBe("dismissed");
     const files = await import("node:fs/promises").then((fs) => fs.readdir(root));
-    const raw = await readFile(join(root, files.find((f) => f.endsWith(".json"))!), "utf8");
+    const raw = await readFile(
+      join(
+        root,
+        files.find((f) => f.endsWith(".json"))!,
+      ),
+      "utf8",
+    );
     expect(JSON.parse(raw).messageId).toBe("restart");
   });
 });
-
 
 describe("composed host ingress cannot skip a blocked disposition", () => {
   test("case signal blocks normal turn until verified, then resumes", async () => {

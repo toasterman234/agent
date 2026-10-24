@@ -90,10 +90,22 @@ export async function gateInboundFeedback(
   if (prior?.status === "filed") {
     try {
       if (!prior.caseRef || !deps.caseSink || !(await deps.caseSink.verify(prior.caseRef))) {
-        return { replyAllowed: false, status: "blocked", signal, reason: "Case readback failed", disposition: prior };
+        return {
+          replyAllowed: false,
+          status: "blocked",
+          signal,
+          reason: "Case readback failed",
+          disposition: prior,
+        };
       }
     } catch {
-      return { replyAllowed: false, status: "blocked", signal, reason: "Case readback failed", disposition: prior };
+      return {
+        replyAllowed: false,
+        status: "blocked",
+        signal,
+        reason: "Case readback failed",
+        disposition: prior,
+      };
     }
     return { replyAllowed: true, status: "filed", signal, disposition: prior };
   }
@@ -135,7 +147,12 @@ export async function gateInboundFeedback(
     } catch {
       // No durable receipt; the host must alert/retry, not send a normal reply.
     }
-    return { replyAllowed: false, status: "blocked", signal, reason: `${reason}; persistence unverified` };
+    return {
+      replyAllowed: false,
+      status: "blocked",
+      signal,
+      reason: `${reason}; persistence unverified`,
+    };
   };
 
   let verdict: FeedbackVerdict;
@@ -155,7 +172,8 @@ export async function gateInboundFeedback(
         saved.status !== "dismissed" ||
         readback?.status !== "dismissed" ||
         readback.sourceHash !== hash
-      ) return block("Dismissal readback failed");
+      )
+        return block("Dismissal readback failed");
       actor.send({ type: "ALLOW_DISMISS" });
       if (!actor.getSnapshot().matches("allowed")) return block("Machine did not authorize reply");
       return { replyAllowed: true, status: "dismissed", signal, disposition: readback };
@@ -188,7 +206,8 @@ export async function gateInboundFeedback(
       readback?.status !== "filed" ||
       readback.sourceHash !== hash ||
       readback.caseRef !== filing.ref
-    ) return block("Case disposition readback failed");
+    )
+      return block("Case disposition readback failed");
     actor.send({ type: "ALLOW_CASE", caseRef: filing.ref });
     if (!actor.getSnapshot().matches("allowed")) return block("Machine did not authorize reply");
     return { replyAllowed: true, status: "filed", signal, disposition: readback };

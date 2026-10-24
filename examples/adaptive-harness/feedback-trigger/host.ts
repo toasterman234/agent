@@ -5,7 +5,14 @@
  * This does not provide process isolation or prevent a separately exposed
  * route from calling the underlying agent; that is an integration test.
  */
-import { gateInboundFeedback, type FeedbackGateDeps, type IncomingMessage, type FeedbackGateResult } from "./gate.js";
+import {
+  gateInboundFeedback,
+  type FeedbackGateDeps,
+  type IncomingMessage,
+  type FeedbackGateResult,
+} from "./gate.js";
+
+export type { FeedbackCaseSink, FeedbackJudge, FeedbackVerdict, IncomingMessage } from "./gate.js";
 
 export type GatedTurnResult<T> =
   | { kind: "response"; result: T; feedback: FeedbackGateResult & { replyAllowed: true } }

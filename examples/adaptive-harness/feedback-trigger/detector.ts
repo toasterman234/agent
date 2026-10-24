@@ -5,7 +5,8 @@ export type FeedbackSignal =
   | { kind: "punctuation-only"; matched: string };
 
 /** Explicit commands are anchored so a casual mention of "feedback" isn't a command. */
-const explicit = /^\s*(?:\/eval\b|eval(?:uation)?\s*(?:[/:-]\s*feedback|case)\b|feedback\s*[/:-]\s*eval\b)/iu;
+const explicit =
+  /^\s*(?:\/eval\b|eval(?:uation)?\s*(?:[/:-]\s*feedback|case)\b|feedback\s*[/:-]\s*eval\b)/iu;
 const burst = /[!?]{3,}/u;
 const onlyPunctuation = /^\s*[!?]{1,3}\s*$/u;
 

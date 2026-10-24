@@ -4,6 +4,13 @@
 **Primary implementation:** [toasterman234/agent draft PR #1](https://github.com/toasterman234/agent/pull/1), `work/388-feedback-trigger-scaffold`.  
 **Source and behavior case:** [master-repo-0.1 #388](https://github.com/toasterman234/master-repo-0.1/issues/388), with [E36/#386](https://github.com/toasterman234/master-repo-0.1/issues/386), [E37/#387](https://github.com/toasterman234/master-repo-0.1/issues/387), and [Case intake #76](https://github.com/toasterman234/master-repo-0.1/issues/76).
 
+## Implementation receipt — 2026-10-24
+
+- Added the standalone `app/` host, responsive UI, persistent hash-chained session log, XState conversation machine, strict feedback judge, CLIProxyAPI adapter, smoke check, and pending-only case seam.
+- Verified: focused feedback tests 28/28; app tests 3/3; examples typecheck exit 0; scoped lint exit 0 with 0 warnings; full lint exit 0 with 135 pre-existing warnings; format check exit 0; loopback `/healthz` smoke exit 0.
+- Live Mac readback: `127.0.0.1:8317` and `gpt-5.6-luna` appeared in `/v1/models`; the bounded Chat Completions probe returned HTTP 401 `Invalid API key`, so live model readiness remains blocked until the correct runtime API key is authorized. No credential was committed or printed.
+- Tailscale Serve was read-only; no routes changed. Production GitHub case filing remains disabled/pending-only. The draft PR remains unmerged and no persistent service was deployed.
+
 ## Selected decisions (supersede prior Cloudflare-host assessment)
 
 1. **Independent Stately agent; no Letta, Pi or Muse runtime.** Stately/XState owns the controller, the persistent conversation state, and the feedback-trigger environment. The model decides only within machine-permitted behavior; it does not receive direct actor event handles or arbitrary file/GitHub write tools.
@@ -25,18 +32,21 @@ The agent may be given broader intent-aware behavior later; this implementation 
 ## Implementation checklist, in execution order
 
 ### A. Reconcile and verify existing scaffold (no live changes)
+
 - [ ] Verify `pnpm exec vitest run examples/adaptive-harness/feedback-trigger/feedback-trigger.test.ts`, `pnpm run typecheck:examples`, `pnpm lint`, `pnpm format:check` at a pinned PR head. Record actual command/results/commit in PR, not fixture authorship as PASS.
 - [ ] Repair any machine/XState alpha API/type errors. Keep `src/` library implementation untouched unless a proven missing hook requires a reviewed change.
 - [ ] Ensure fork GitHub Actions for draft PR run; if no workflow appears, diagnose settings/permissions before concluding tests passed.
 - [ ] Pin package versions from fork lockfile (`@statelyai/agent` alpha and `xstate@6.0.0-alpha.69`), and record model adapter interface choices.
 
 ### B. Live Mac proxy preflight (read-only, no credential output)
+
 - [ ] Inspect local service/listener for `127.0.0.1:8317`; verify model list from `GET /v1/models` or a suitably bounded authenticated request **without logging the key, config, tokens, raw headers, or account data**.
 - [ ] Resolve the key through existing local CLIProxyAPI secret/config mechanism at runtime; no `.env`, API key, home directory secret or subscription token in Git. Dedicated account-scoped runtime environment and restrictive mode-0600 secret reference where supported.
 - [ ] Probe a single bounded `gpt-5.6-luna` request and capture only status, actual returned model ID, token counts where available, and elapsed time. Test SDK Chat Completions API first because the fork's `@statelyai/agent/openai` adapter uses it; if the proxy needs Responses for this model, implement/verify the compatible executor rather than silently changing model/provider.
 - [ ] Confirm service health after Mac login/restart, expected quota/error responses and rate limiting. Subscription-backed proxy access is contingent on the local proxy/provider's supported use and available capacity; do not assume unlimited calls.
 
 ### C. Build one Mac-local standalone host + chat
+
 - [ ] Add `examples/adaptive-harness/app/` with a minimal Node HTTP handler and mobile-friendly chat page; reuse Stately's existing raw OpenAI SDK `createOpenAiExecutors` implementation (`examples/openai-sdk-host`) and existing package deps, not an extra framework by default.
 - [ ] Create a small persistent Stately conversation machine with explicit `receiving → review-gate → generating → respond/blocked → awaiting-next-message` behavior. Maintain `sessionId`, message ordering, machine/policy version, event log, and bounded conversation context. The host owns all events and calls; a model output cannot forge `ALLOW_CASE` or `ALLOW_DISMISS`.
 - [ ] Expose only tightly scoped authenticated routes: `GET /healthz` (no model secrets), `POST /api/sessions`, `GET /api/sessions/:id`, `POST /api/sessions/:id/messages`, `GET /api/sessions/:id/feedback`, and `POST /api/sessions/:id/feedback/:id/disposition`. Validate all inputs and refuse cross-session IDs; include CSRF/Origin checks or a same-site session mechanism.
@@ -45,6 +55,7 @@ The agent may be given broader intent-aware behavior later; this implementation 
 - [ ] Do not grant shell, file write, GitHub or Temper capabilities to the model in v0; authorized adapters sit behind host-owned typed methods.
 
 ### D. Plug in Luna judge + reviewed Case adapter
+
 - [ ] Supply `FeedbackJudge.evaluate` with structured output validation (`dismiss` or `case`), a bounded ±10-message context when available, appropriate failure taxonomy, and evidence refs; no autonomous policy promotions.
 - [ ] Connect the pending review UI to an idempotent approved case action. Prefer #76's current source-of-truth intake contract if a live implementation is proven, not a second canonical intake service. If #76 remains a plan/partial path, implement **local pending review first** and explicitly label GitHub filing unavailable until an authorized adapter is configured.
 - [ ] GitHub case payload includes reproducible case signature/ID, source message ID + context pointers, recurrence/relationship links, primary + secondary taxonomy, expected behavior, minimal redacted evidence, proposed fix and replay eval. Search existing open/closed history before create. Protect private transcript content: default to metadata and a human-reviewable redacted summary, not automatic verbatim upload.
@@ -52,6 +63,7 @@ The agent may be given broader intent-aware behavior later; this implementation 
 - [ ] File one test case to an approved isolated fixture or private test target, not `master-repo-0.1` production cases, until explicitly authorized.
 
 ### E. Verification, access, then activation
+
 - [ ] Negative/golden tests: #388 `??` and mixed punctuation; quoted `???` dismissal; E36 status case as evidence (without claiming E36 status-read gate implemented); E37 self-diagnosis as out-of-scope egress case; duplicate request/retry; restart after judge and after filing; wrong session/user; missing CLI proxy/invalid model; readback failure; journal unavailable; guard bypass attempt; allowed nontrigger normal turn.
 - [ ] Record factual metrics: no-trigger deterministic detection micro-cost; 0 feedback judge calls for ordinary turns, max one normally for nominated turns; normal response model calls; token/latency/error-rate comparison on a bounded fixture set; clear fallbacks when proxy unavailable.
 - [ ] Confirm `tailscale serve status`, present HTTPS mounts, occupied ports and other local clients **before** choosing app port or changing mappings. Bind Node and CLIProxyAPI to `127.0.0.1`; expose **only** the chat app behind Tailscale Serve to the tailnet. No Funnel and no public server. Preserve authenticated access and tailnet ACLs.
