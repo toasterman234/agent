@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stately adaptive harness</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font:
+          16px/1.45 system-ui,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #10131a;
+        color: #f4f6fb;
+      }
+      main {
+        width: min(760px, 100%);
+        min-height: 100vh;
+        margin: auto;
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+      }
+      header,
+      footer {
+        padding: 1rem;
+        border-bottom: 1px solid #303746;
+      }
+      footer {
+        border-top: 1px solid #303746;
+        border-bottom: 0;
+      }
+      #messages {
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        overflow: auto;
+      }
+      #temper-capability {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #303746;
+        background: #141b26;
+      }
+      .capability-heading {
+        display: flex;
+        gap: 0.6rem;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 0.55rem;
+      }
+      #temper-capability select,
+      #temper-capability input {
+        min-width: 0;
+        flex: 1;
+        background: #1b202b;
+        color: inherit;
+      }
+      #temper-result {
+        margin: 0.6rem 0 0;
+        max-height: 180px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        color: #aeb8ca;
+        font-size: 0.75rem;
+      }
+      .message,
+      .review {
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+        white-space: pre-wrap;
+      }
+      .user {
+        align-self: end;
+        background: #315bb5;
+        max-width: 85%;
+      }
+      .assistant {
+        align-self: start;
+        background: #242b38;
+        max-width: 85%;
+      }
+      .review {
+        background: #4a3014;
+        border: 1px solid #bd7d2e;
+      }
+      form {
+        display: flex;
+        gap: 0.5rem;
+      }
+      input,
+      button {
+        font: inherit;
+        border-radius: 0.5rem;
+        border: 1px solid #58657c;
+        padding: 0.7rem;
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        background: #1b202b;
+        color: inherit;
+      }
+      button {
+        background: #315bb5;
+        color: white;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      small {
+        color: #aeb8ca;
+      }
+      #config-toggle {
+        margin-top: 0.75rem;
+        padding: 0.45rem 0.75rem;
+        background: #283349;
+      }
+      #config-panel {
+        padding: 0.8rem 1rem;
+        background: #19212d;
+        border-bottom: 1px solid #303746;
+        max-height: 48vh;
+        overflow: auto;
+      }
+      #config-panel[hidden] {
+        display: none;
+      }
+      #config-panel pre {
+        white-space: pre-wrap;
+        font:
+          0.78rem/1.45 ui-monospace,
+          monospace;
+        overflow-wrap: anywhere;
+      }
+      #config-panel details {
+        margin: 0.65rem 0;
+      }
+      #config-skills {
+        display: grid;
+        gap: 0.6rem;
+      }
+      .skill-row {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        justify-content: space-between;
+        background: #242b38;
+        border-radius: 0.65rem;
+        padding: 0.6rem;
+      }
+      .skill-row button {
+        flex-shrink: 0;
+        font-size: 0.85rem;
+        padding: 0.45rem;
+      }
+      #config-summary {
+        color: #aeb8ca;
+        font-size: 0.9rem;
+      }
+      #activity {
+        border-bottom: 1px solid #303746;
+        padding: 0.55rem 1rem 0.65rem;
+        background: #171e2a;
+        font-size: 0.85rem;
+      }
+      #activity-state {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+      }
+      #activity-dot {
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: 50%;
+        background: #69788f;
+        flex-shrink: 0;
+      }
+      #activity-dot.busy {
+        background: #7fb3ff;
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      #activity-dot.blocked {
+        background: #e3a348;
+      }
+      #activity-dot.failed {
+        background: #e37a7a;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+      #activity-meta {
+        color: #aeb8ca;
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+        overflow-wrap: anywhere;
+      }
+      #activity details {
+        margin-top: 0.35rem;
+      }
+      #activity summary {
+        cursor: pointer;
+        color: #aeb8ca;
+      }
+      #activity-steps {
+        max-height: 125px;
+        overflow: auto;
+        margin: 0.35rem 0 0;
+        padding-left: 1.3rem;
+        color: #aeb8ca;
+      }
+      #activity-steps li {
+        padding: 0.15rem 0;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #activity-dot.busy {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>Stately adaptive harness</strong><br /><small id="status"
+          >Starting local session…</small
+        >
+        <div>
+          <button id="config-toggle" type="button" aria-expanded="false">
+            Agent config &amp; skills
+          </button>
+        </div>
+        <section id="config-panel" hidden aria-label="Active runtime configuration">
+          <div id="config-summary">Loading runtime configuration…</div>
+          <details>
+            <summary>Identity (AGENTS.md)</summary>
+            <pre id="config-identity"></pre>
+          </details>
+          <details>
+            <summary>Policy</summary>
+            <pre id="config-policy"></pre>
+          </details>
+          <details>
+            <summary>Behavior</summary>
+            <pre id="config-behavior"></pre>
+          </details>
+          <strong>Available prompt skills</strong>
+          <div id="config-skills"></div>
+          <small
+            >Prompt skills guide replies only. No shell, file-edit, remote tools or GitHub
+            case-filing capability is attached.</small
+          >
+        </section>
+      </header>
+      <section id="activity" aria-label="Agent activity and state">
+        <div id="activity-state" role="status" aria-live="polite">
+          <span id="activity-dot"></span>
+          <strong id="activity-label">Idle · checking connection</strong>
+        </div>
+        <div id="activity-meta" aria-live="off">No turn activity yet</div>
+        <div id="behavior-meta" aria-live="off">
+          Behavior: conversation · awaiting first message
+        </div>
+        <details>
+          <summary>Turn trace</summary>
+          <ol id="activity-steps"></ol>
+        </details>
+      </section>
+      <section id="temper-capability" aria-label="Temper read capability">
+        <div class="capability-heading">
+          <strong>Temper · read-only</strong>
+          <small id="temper-capability-status"
+            >Host-controlled capability · tenant incident-rca</small
+          >
+        </div>
+        <form id="temper-form">
+          <select id="temper-capability-select" aria-label="Temper capability">
+            <option value="health">Health</option>
+            <option value="metadata">Metadata</option>
+            <option value="allowed-entities">Allowed entity types</option>
+            <option value="read-entity">Read entity</option>
+          </select>
+          <select id="temper-entity-type" aria-label="Temper entity type" hidden>
+            <option value="Incident">Incident</option>
+            <option value="Remediation">Remediation</option>
+            <option value="Postmortem">Postmortem</option>
+          </select>
+          <input
+            id="temper-entity-id"
+            aria-label="Temper entity id"
+            placeholder="Entity id"
+            hidden
+          />
+          <button id="temper-read" type="submit">Read</button>
+        </form>
+        <pre id="temper-result" aria-live="polite">No Temper read yet.</pre>
+      </section>
+      <section id="messages" aria-live="polite"></section>
+      <footer>
+        <form id="chat">
+          <input
+            id="input"
+            autocomplete="off"
+            placeholder="Message the local harness…"
+            required
+          /><button id="send-button">Send</button>
+        </form>
+      </footer>
+    </main>
+    <script>
+      const messages = document.querySelector("#messages");
+      const status = document.querySelector("#status");
+      const input = document.querySelector("#input");
+      const configButton = document.querySelector("#config-toggle");
+      const configPanel = document.querySelector("#config-panel");
+      const activityLabel = document.querySelector("#activity-label");
+      const activityDot = document.querySelector("#activity-dot");
+      const activityMeta = document.querySelector("#activity-meta");
+      const behaviorMeta = document.querySelector("#behavior-meta");
+      const activitySteps = document.querySelector("#activity-steps");
+      const sendButton = document.querySelector("#send-button");
+      const temperForm = document.querySelector("#temper-form");
+      const temperCapability = document.querySelector("#temper-capability-select");
+      const temperEntityType = document.querySelector("#temper-entity-type");
+      const temperEntityId = document.querySelector("#temper-entity-id");
+      const temperRead = document.querySelector("#temper-read");
+      const temperStatus = document.querySelector("#temper-capability-status");
+      const temperResult = document.querySelector("#temper-result");
+      const stageLabels = {
+        received: "Received message",
+        "checking-feedback": "Checking feedback rules",
+        "judging-feedback": "Evaluating feedback with Luna",
+        "calling-luna": "Waiting for Luna response",
+        "saving-response": "Saving reply",
+        "feedback-pending": "Feedback review pending",
+        completed: "Response complete",
+        failed: "Turn failed",
+      };
+      let activityPoll;
+      let sending = false;
+      const temperStates = {
+        requested: "Requested",
+        authenticating: "Authenticating",
+        reading: "Reading",
+        succeeded: "Succeeded",
+        denied: "Denied",
+        failed: "Failed",
+      };
+      function updateTemperActivity(data) {
+        const trace = data.activeTemper ?? data.recentTemper?.[0];
+        if (!trace) return;
+        const state = temperStates[trace.state] ?? trace.state;
+        const states = (trace.steps ?? [])
+          .map((step) => temperStates[step.state] ?? step.state)
+          .join(" → ");
+        temperStatus.textContent = `${states || state} · ${trace.tenant} · ${trace.principal ?? "principal resolving"} · ${trace.correlationId} · ${seconds(trace.durationMs)}`;
+        if (trace.error) temperResult.textContent = `${trace.error.code}: ${trace.error.message}`;
+      }
+      const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
+      function renderActivity(data) {
+        const active = data.active;
+        const trace = active ?? data.recent?.[0];
+        const stage = active?.stage ?? trace?.steps?.at(-1)?.stage ?? "idle";
+        const status = active ? "working" : (trace?.status ?? "idle");
+        activityDot.className =
+          status === "working"
+            ? "busy"
+            : status === "blocked"
+              ? "blocked"
+              : status === "failed"
+                ? "failed"
+                : "";
+        activityLabel.textContent = active
+          ? (stageLabels[stage] ?? "Working")
+          : trace
+            ? (stageLabels[stage] ?? "Previous turn finished")
+            : "Idle · connected";
+        const elapsed = trace ? seconds(trace.elapsedMs) : "—";
+        const sinceChange =
+          active && active.stageAgeMs > 12000
+            ? ` · No stage change for ${seconds(active.stageAgeMs)} (still awaiting host result)`
+            : "";
+        const usage =
+          !active && trace?.usage?.totalTokens !== undefined
+            ? ` · ${trace.usage.totalTokens} tokens`
+            : "";
+        activityMeta.textContent = `${elapsed} · ${trace?.model ?? "No active turn"}${usage}${sinceChange} · server up ${data.serverUptimeSeconds}s`;
+        activitySteps.replaceChildren();
+        updateTemperActivity(data);
+        for (const step of trace?.steps ?? []) {
+          const line = document.createElement("li");
+          line.textContent = `${seconds(step.elapsedMs)} · ${stageLabels[step.stage] ?? step.stage}`;
+          activitySteps.append(line);
+        }
+      }
+      async function refreshActivity() {
+        if (!session) return;
+        try {
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/activity`,
+            { cache: "no-store" },
+          );
+          if (!response.ok) throw new Error("Activity endpoint unavailable");
+          renderActivity(await response.json());
+        } catch {
+          activityDot.className = "failed";
+          activityLabel.textContent = "Telemetry connection unavailable";
+          activityMeta.textContent = "Cannot verify live agent status";
+        }
+      }
+      function beginActivityPolling() {
+        clearInterval(activityPoll);
+        void refreshActivity();
+        activityPoll = setInterval(() => {
+          void refreshActivity();
+        }, 850);
+      }
+      async function endActivityPolling() {
+        clearInterval(activityPoll);
+        activityPoll = undefined;
+        await refreshActivity();
+      }
+
+      let session;
+      const add = (text, role) => {
+        const node = document.createElement("div");
+        node.className = `message ${role}`;
+        node.textContent = text;
+        messages.append(node);
+        messages.scrollTop = messages.scrollHeight;
+      };
+      const render = (data) => {
+        const behavior = data.behavior;
+        behaviorMeta.textContent = behavior
+          ? `Behavior: ${behavior.behaviorId} · intent: ${behavior.intent} · ${behavior.phase} · goal: ${behavior.goal ?? "none"}`
+          : "Behavior: conversation · awaiting first message";
+        messages.replaceChildren();
+        for (const message of data.messages ?? []) add(message.text, message.role);
+        for (const feedback of data.feedback ?? []) {
+          if (feedback.status === "pending") {
+            const card = document.createElement("div");
+            card.className = "review";
+            const heading = document.createElement("strong");
+            heading.textContent = "Feedback review pending";
+            const reason = document.createElement("p");
+            reason.textContent = feedback.reason;
+            const notice = document.createElement("small");
+            notice.textContent = "Case filing is unavailable in this candidate harness.";
+            card.append(heading, reason, notice);
+            const dismiss = document.createElement("button");
+            dismiss.textContent = "Dismiss with reason";
+            dismiss.onclick = async () => {
+              const reason = window.prompt("Reason for dismissal?");
+              if (!reason) return;
+              dismiss.disabled = true;
+              beginActivityPolling();
+              try {
+                const response = await fetch(
+                  `/api/sessions/${encodeURIComponent(session.sessionId)}/feedback/${encodeURIComponent(feedback.messageId)}/disposition`,
+                  {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ action: "dismiss", reason }),
+                  },
+                );
+                const result = await response.json();
+                if (!response.ok) return alert(result.error ?? "Dismissal failed");
+                render(result.session);
+              } catch (error) {
+                alert(error.message);
+              } finally {
+                dismiss.disabled = false;
+                await endActivityPolling();
+              }
+            };
+            const file = document.createElement("button");
+            file.textContent = "File case (unavailable)";
+            file.disabled = true;
+            card.append(dismiss, file);
+            messages.append(card);
+          }
+        }
+      };
+      temperCapability.onchange = () => {
+        const needsEntity = temperCapability.value === "read-entity";
+        temperEntityType.hidden = !needsEntity;
+        temperEntityId.hidden = !needsEntity;
+        temperEntityId.required = needsEntity;
+      };
+      temperForm.onsubmit = async (event) => {
+        event.preventDefault();
+        if (!session || temperRead.disabled) return;
+        temperRead.disabled = true;
+        temperStatus.textContent = "Requested · incident-rca · authenticating";
+        temperResult.textContent = "Reading Temper…";
+        try {
+          const body = { capability: temperCapability.value };
+          if (temperCapability.value === "read-entity") {
+            body.entityType = temperEntityType.value;
+            body.entityId = temperEntityId.value.trim();
+          }
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/temper`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            },
+          );
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error ?? "Temper read failed");
+          const result = data.result;
+          temperStatus.textContent = `Succeeded · ${result.tenant} · ${result.principal} · ${result.correlationId}`;
+          temperResult.textContent = JSON.stringify(result.entity ?? result, null, 2);
+          await refreshActivity();
+        } catch (error) {
+          temperStatus.textContent = `Failed · incident-rca`;
+          temperResult.textContent = error.message;
+        } finally {
+          temperRead.disabled = false;
+        }
+      };
+      async function showRuntimeConfig() {
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(session.sessionId)}/config`,
+        );
+        if (!response.ok) throw new Error("Cannot access the runtime configuration");
+        const config = await response.json();
+        document.querySelector("#config-summary").textContent =
+          `${config.name} · model ${config.model} · config ${config.version} · skills: prompt-only`;
+        for (const section of ["identity", "policy", "behavior"]) {
+          document.querySelector(`#config-${section}`).textContent =
+            config.documents[section] ?? "(not loaded)";
+        }
+        const list = document.querySelector("#config-skills");
+        list.replaceChildren();
+        for (const skill of config.skills) {
+          const row = document.createElement("div");
+          row.className = "skill-row";
+          const label = document.createElement("div");
+          const name = document.createElement("strong");
+          name.textContent = skill.title;
+          const description = document.createElement("small");
+          description.textContent = ` ${skill.description} · ${skill.mode}`;
+          label.append(name, document.createElement("br"), description);
+          const use = document.createElement("button");
+          use.type = "button";
+          use.textContent = "Use";
+          use.setAttribute("aria-label", `Use ${skill.title} skill`);
+          use.onclick = () => {
+            input.value = `/skill ${skill.id} `;
+            configPanel.hidden = true;
+            configButton.setAttribute("aria-expanded", "false");
+            input.focus();
+          };
+          row.append(label, use);
+          list.append(row);
+        }
+      }
+      configButton.onclick = async () => {
+        if (!session) return;
+        if (!configPanel.hidden) {
+          configPanel.hidden = true;
+          configButton.setAttribute("aria-expanded", "false");
+          return;
+        }
+        try {
+          await showRuntimeConfig();
+          configPanel.hidden = false;
+          configButton.setAttribute("aria-expanded", "true");
+        } catch (error) {
+          alert(error.message);
+        }
+      };
+      async function start() {
+        const response = await fetch("/api/sessions", { method: "POST" });
+        session = await response.json();
+        status.textContent = `Session ${session.sessionId} · pending-only case review · Temper read-only`;
+        render(session);
+        await refreshActivity();
+      }
+      document.querySelector("#chat").onsubmit = async (event) => {
+        event.preventDefault();
+        if (sending || !session) return;
+        const text = input.value.trim();
+        if (!text) return;
+        sending = true;
+        sendButton.disabled = true;
+        input.value = "";
+        add(text, "user");
+        beginActivityPolling();
+        try {
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/messages`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ messageId: crypto.randomUUID(), text }),
+            },
+          );
+          const result = await response.json();
+          if (result.status === "blocked") {
+            render(result.session);
+            return;
+          }
+          if (!response.ok) {
+            add(result.error ?? "Request failed", "assistant");
+            return;
+          }
+          if (result.text) add(result.text, "assistant");
+          render(result.session);
+        } catch (error) {
+          add("Request failed: " + error.message, "assistant");
+        } finally {
+          sending = false;
+          sendButton.disabled = false;
+          await endActivityPolling();
+        }
+      };
+      start().catch((error) => {
+        status.textContent = `Unable to start: ${error.message}`;
+      });
+    </script>
+  </body>
+</html>
