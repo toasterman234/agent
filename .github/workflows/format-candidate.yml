@@ -1,0 +1,30 @@
+name: Candidate formatter (temporary)
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+      - run: npm i pnpm@latest -g
+      - run: pnpm install --frozen-lockfile
+      - name: Format targeted candidate files and emit reviewable output
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec oxfmt examples/adaptive-harness/app/agent-config.ts examples/adaptive-harness/app/tests/app.test.ts examples/adaptive-harness/app/web/index.html
+          for file in examples/adaptive-harness/app/agent-config.ts examples/adaptive-harness/app/tests/app.test.ts examples/adaptive-harness/app/web/index.html; do
+            echo "BEGIN_FORMATTED::$file"
+            base64 -w0 "$file"
+            echo
+            echo "END_FORMATTED::$file"
+          done
