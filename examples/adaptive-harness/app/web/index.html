@@ -137,25 +137,65 @@
       }
       #activity {
         border-bottom: 1px solid #303746;
-        padding: .55rem 1rem .65rem;
+        padding: 0.55rem 1rem 0.65rem;
         background: #171e2a;
-        font-size: .85rem;
+        font-size: 0.85rem;
       }
-      #activity-state { display: flex; align-items: center; gap: .55rem; }
-      #activity-dot { width: .55rem; height: .55rem; border-radius: 50%; background: #69788f; flex-shrink: 0; }
-      #activity-dot.busy { background: #7fb3ff; animation: pulse 1.4s ease-in-out infinite; }
-      #activity-dot.blocked { background: #e3a348; }
-      #activity-dot.failed { background: #e37a7a; }
-      @keyframes pulse { 50% { opacity: .3; } }
-      #activity-meta { color: #aeb8ca; font-size: .75rem; margin-top: .25rem; overflow-wrap: anywhere; }
-      #activity details { margin-top: .35rem; }
-      #activity summary { cursor: pointer; color: #aeb8ca; }
-      #activity-steps { max-height: 125px; overflow: auto; margin: .35rem 0 0; padding-left: 1.3rem; color: #aeb8ca; }
-      #activity-steps li { padding: .15rem 0; }
+      #activity-state {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+      }
+      #activity-dot {
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: 50%;
+        background: #69788f;
+        flex-shrink: 0;
+      }
+      #activity-dot.busy {
+        background: #7fb3ff;
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      #activity-dot.blocked {
+        background: #e3a348;
+      }
+      #activity-dot.failed {
+        background: #e37a7a;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+      #activity-meta {
+        color: #aeb8ca;
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+        overflow-wrap: anywhere;
+      }
+      #activity details {
+        margin-top: 0.35rem;
+      }
+      #activity summary {
+        cursor: pointer;
+        color: #aeb8ca;
+      }
+      #activity-steps {
+        max-height: 125px;
+        overflow: auto;
+        margin: 0.35rem 0 0;
+        padding-left: 1.3rem;
+        color: #aeb8ca;
+      }
+      #activity-steps li {
+        padding: 0.15rem 0;
+      }
       @media (prefers-reduced-motion: reduce) {
-        #activity-dot.busy { animation: none; }
+        #activity-dot.busy {
+          animation: none;
+        }
       }
-
     </style>
   </head>
   <body>
@@ -197,7 +237,10 @@
           <strong id="activity-label">Idle · checking connection</strong>
         </div>
         <div id="activity-meta" aria-live="off">No turn activity yet</div>
-        <details><summary>Turn trace</summary><ol id="activity-steps"></ol></details>
+        <details>
+          <summary>Turn trace</summary>
+          <ol id="activity-steps"></ol>
+        </details>
       </section>
       <section id="messages" aria-live="polite"></section>
       <footer>
@@ -223,14 +266,14 @@
       const activitySteps = document.querySelector("#activity-steps");
       const sendButton = document.querySelector("#send-button");
       const stageLabels = {
-        "received": "Received message",
+        received: "Received message",
         "checking-feedback": "Checking feedback rules",
         "judging-feedback": "Evaluating feedback with Luna",
         "calling-luna": "Waiting for Luna response",
         "saving-response": "Saving reply",
         "feedback-pending": "Feedback review pending",
-        "completed": "Response complete",
-        "failed": "Turn failed",
+        completed: "Response complete",
+        failed: "Turn failed",
       };
       let activityPoll;
       let sending = false;
@@ -239,17 +282,29 @@
         const active = data.active;
         const trace = active ?? data.recent?.[0];
         const stage = active?.stage ?? trace?.steps?.at(-1)?.stage ?? "idle";
-        const status = active ? "working" : trace?.status ?? "idle";
-        activityDot.className = status === "working" ? "busy" : status === "blocked" ? "blocked" : status === "failed" ? "failed" : "";
+        const status = active ? "working" : (trace?.status ?? "idle");
+        activityDot.className =
+          status === "working"
+            ? "busy"
+            : status === "blocked"
+              ? "blocked"
+              : status === "failed"
+                ? "failed"
+                : "";
         activityLabel.textContent = active
-          ? stageLabels[stage] ?? "Working"
-          : trace ? stageLabels[stage] ?? "Previous turn finished" : "Idle · connected";
+          ? (stageLabels[stage] ?? "Working")
+          : trace
+            ? (stageLabels[stage] ?? "Previous turn finished")
+            : "Idle · connected";
         const elapsed = trace ? seconds(trace.elapsedMs) : "—";
-        const sinceChange = active && active.stageAgeMs > 12000
-          ? ` · No stage change for ${seconds(active.stageAgeMs)} (still awaiting host result)`
-          : "";
-        const usage = !active && trace?.usage?.totalTokens !== undefined
-          ? ` · ${trace.usage.totalTokens} tokens` : "";
+        const sinceChange =
+          active && active.stageAgeMs > 12000
+            ? ` · No stage change for ${seconds(active.stageAgeMs)} (still awaiting host result)`
+            : "";
+        const usage =
+          !active && trace?.usage?.totalTokens !== undefined
+            ? ` · ${trace.usage.totalTokens} tokens`
+            : "";
         activityMeta.textContent = `${elapsed} · ${trace?.model ?? "No active turn"}${usage}${sinceChange} · server up ${data.serverUptimeSeconds}s`;
         activitySteps.replaceChildren();
         for (const step of trace?.steps ?? []) {
@@ -276,7 +331,9 @@
       function beginActivityPolling() {
         clearInterval(activityPoll);
         void refreshActivity();
-        activityPoll = setInterval(() => { void refreshActivity(); }, 850);
+        activityPoll = setInterval(() => {
+          void refreshActivity();
+        }, 850);
       }
       async function endActivityPolling() {
         clearInterval(activityPoll);
@@ -314,17 +371,17 @@
               dismiss.disabled = true;
               beginActivityPolling();
               try {
-              const response = await fetch(
-                `/api/sessions/${encodeURIComponent(session.sessionId)}/feedback/${encodeURIComponent(feedback.messageId)}/disposition`,
-                {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ action: "dismiss", reason }),
-                },
-              );
-              const result = await response.json();
-              if (!response.ok) return alert(result.error ?? "Dismissal failed");
-              render(result.session);
+                const response = await fetch(
+                  `/api/sessions/${encodeURIComponent(session.sessionId)}/feedback/${encodeURIComponent(feedback.messageId)}/disposition`,
+                  {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ action: "dismiss", reason }),
+                  },
+                );
+                const result = await response.json();
+                if (!response.ok) return alert(result.error ?? "Dismissal failed");
+                render(result.session);
               } catch (error) {
                 alert(error.message);
               } finally {
@@ -410,25 +467,25 @@
         add(text, "user");
         beginActivityPolling();
         try {
-        const response = await fetch(
-          `/api/sessions/${encodeURIComponent(session.sessionId)}/messages`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ messageId: crypto.randomUUID(), text }),
-          },
-        );
-        const result = await response.json();
-        if (result.status === "blocked") {
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/messages`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ messageId: crypto.randomUUID(), text }),
+            },
+          );
+          const result = await response.json();
+          if (result.status === "blocked") {
+            render(result.session);
+            return;
+          }
+          if (!response.ok) {
+            add(result.error ?? "Request failed", "assistant");
+            return;
+          }
+          if (result.text) add(result.text, "assistant");
           render(result.session);
-          return;
-        }
-        if (!response.ok) {
-          add(result.error ?? "Request failed", "assistant");
-          return;
-        }
-        if (result.text) add(result.text, "assistant");
-        render(result.session);
         } catch (error) {
           add("Request failed: " + error.message, "assistant");
         } finally {
