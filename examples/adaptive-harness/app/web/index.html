@@ -265,6 +265,9 @@
           <strong id="activity-label">Idle · checking connection</strong>
         </div>
         <div id="activity-meta" aria-live="off">No turn activity yet</div>
+        <div id="behavior-meta" aria-live="off">
+          Behavior: conversation · awaiting first message
+        </div>
         <details>
           <summary>Turn trace</summary>
           <ol id="activity-steps"></ol>
@@ -320,6 +323,7 @@
       const activityLabel = document.querySelector("#activity-label");
       const activityDot = document.querySelector("#activity-dot");
       const activityMeta = document.querySelector("#activity-meta");
+      const behaviorMeta = document.querySelector("#behavior-meta");
       const activitySteps = document.querySelector("#activity-steps");
       const sendButton = document.querySelector("#send-button");
       const temperForm = document.querySelector("#temper-form");
@@ -433,6 +437,10 @@
         messages.scrollTop = messages.scrollHeight;
       };
       const render = (data) => {
+        const behavior = data.behavior;
+        behaviorMeta.textContent = behavior
+          ? `Behavior: ${behavior.behaviorId} · intent: ${behavior.intent} · ${behavior.phase} · goal: ${behavior.goal ?? "none"}`
+          : "Behavior: conversation · awaiting first message";
         messages.replaceChildren();
         for (const message of data.messages ?? []) add(message.text, message.role);
         for (const feedback of data.feedback ?? []) {

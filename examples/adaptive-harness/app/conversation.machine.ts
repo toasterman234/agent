@@ -17,6 +17,7 @@ const contextSchema = z.object({
     })
     .nullable(),
   blockedReason: z.string().nullable(),
+  selectedBehavior: z.string().nullable(),
 });
 
 export type ConversationMessage = { messageId: string; text: string; role: "user" | "assistant" };
@@ -29,6 +30,7 @@ export type PendingFeedback = {
 export type ConversationContext = z.infer<typeof contextSchema>;
 export type ConversationEvent =
   | { type: "RECEIVE_MESSAGE"; messageId: string; text: string }
+  | { type: "SELECT_BEHAVIOR"; messageId: string; behaviorId: string }
   | { type: "REVIEW_PASSED" }
   | { type: "FEEDBACK_PENDING"; feedback: PendingFeedback }
   | { type: "FEEDBACK_DISMISSED" }
@@ -45,6 +47,7 @@ const conversationSetup = setup({
     events: {
       RECEIVE_MESSAGE: z.object({ messageId: z.string(), text: z.string() }),
       REVIEW_PASSED: z.object({}),
+      SELECT_BEHAVIOR: z.object({ messageId: z.string(), behaviorId: z.string() }),
       FEEDBACK_PENDING: z.object({ feedback: contextSchema.shape.pendingFeedback.unwrap() }),
       FEEDBACK_DISMISSED: z.object({}),
       FEEDBACK_FILED: z.object({}),
@@ -64,6 +67,7 @@ export const conversationMachine = conversationSetup.createMachine({
     lastMessageId: null,
     pendingFeedback: null,
     blockedReason: null,
+    selectedBehavior: null,
   }),
   initial: "awaitingMessage",
   states: {
@@ -76,6 +80,7 @@ export const conversationMachine = conversationSetup.createMachine({
             lastMessageId: event.messageId,
             blockedReason: null,
             pendingFeedback: null,
+            selectedBehavior: null,
             messages: [
               ...context.messages,
               { messageId: event.messageId, role: "user" as const, text: event.text },
@@ -86,6 +91,13 @@ export const conversationMachine = conversationSetup.createMachine({
     },
     reviewing: {
       on: {
+        SELECT_BEHAVIOR: ({ context, event }) =>
+          context.lastMessageId === event.messageId &&
+          ["continue-work", "revise-work", "verification", "status-check", "conversation"].includes(
+            event.behaviorId,
+          )
+            ? { context: { ...context, selectedBehavior: event.behaviorId } }
+            : undefined,
         REVIEW_PASSED: { target: "generating" },
         FEEDBACK_PENDING: ({ context, event }) => ({
           target: "blocked",
