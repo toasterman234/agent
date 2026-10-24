@@ -244,7 +244,113 @@ Property-based/state-model tests: generate sequences of valid/invalid events, co
 - Explicitly excluded: autonomous policy approval, privileged Temper effects, universal sandbox/OS egress guarantee, remote GitHub Case filing, Temper policy/spec hot-deploy, human-approver UX without identity proof, rewriting agent core, adding unrelated platforms, and claiming all free-form language is deterministically provable.
 - If any authorized Mac-control-plane workflow or bypass behaves incorrectly during a future rollout, record evidence and open an issue in toasterman234/github-workflows-control-plane. No Mac access is used in the authoring of this spec.
 
-## 11. Acceptance checklist for the completed feature (NOT current status)
+## 11. Anti-sprawl: one component catalog, not another runtime
+
+**Decision for review:** Extend the existing W0/W1 implementation with one Stately **Component Catalog**. The catalog is an indexed, typed projection of the **actual** Stately declarations and external authoritative metadata, not a fourth execution engine, a competing canonical store or a general-purpose ontology platform. This is essential for managing a growing collection of policy/behavior/skills/capabilities and must not become a separate new project.
+
+### 11.1 Object model and ownership
+
+A catalog entry is one logical component with immutable stable ID across revisions, current source reference, owner, lifecycle, interface, dependencies and tests. Component **kinds** are a controlled discriminator, not different incompatible schema/store subsystems:
+- policy, rule, constraint, behavior, state_machine, state, transition, prompt, skill, capability, tool, integration, context_source, memory_binding, evaluation, verifier, documentation_view (add another kind only with explicit need);
+- components may be granular, but not every ordinary TypeScript function becomes a component. Create entries for independently governed, configured, exposed, tested or reused things. Private implementation helpers remain code.
+- relationships use a small vocabulary: \`depends_on\`, \`invokes\`, \`governed_by\`, \`implemented_by\`, \`enforced_at\`, \`tested_by\`, \`verified_by\`, \`produces\`, \`replaces\`, \`conflicts_with\`. Every target ID resolves within the catalog or to a documented typed external \`temper://\`, canonical ref or issue/PR/source evidence URI.
+- **stable identity != revision**: an ID is never reused for a different concept. Record replacement/supersession with a link, and preserve retired history. A content/commit SHA identifies immutable revisions; the current pointer is explicit.
+- A component can provide several capabilities; one capability can be consumed by several behaviors. Avoid cloning a policy for each caller.
+
+Suggested co-located descriptor contract (illustrative, not runtime grant):
+
+~~~ts
+type ComponentKind =
+  | "policy" | "rule" | "behavior" | "state_machine" | "skill"
+  | "capability" | "tool" | "integration" | "verifier" | "evaluation"
+  | "prompt" | "context_source" | "memory_binding";
+type ComponentRelationship = {
+  kind: "depends_on" | "invokes" | "governed_by" | "implemented_by"
+      | "enforced_at" | "tested_by" | "verified_by" | "replaces" | "conflicts_with";
+  target: string;
+};
+type ComponentDescriptor = {
+  id: string; kind: ComponentKind; title: string;
+  description: string;
+  source: { path: string; exportName?: string };
+  owner: "stately-host" | "xstate" | "tardigrade" | "temper" | "prompt";
+  implementationRef?: string;  // real exported guard/transition/tool binding
+  relations: ComponentRelationship[];
+  lifecycle: "candidate" | "approved" | "retired";
+  tests: string[]; evidenceRefs: string[];
+  externalAuthorityRef?: string; // never interpreted as a local permit
+};
+~~~
+
+The authoritative **definitions** remain in the code and external deployed Temper; the catalog doesn't reimplement guards. Keep descriptors co-located with their real implementation module, export registered descriptors through one explicit \`app/components/index.ts\` build manifest (avoid magic filesystem scanning with side effects). A simple build step resolves and validates references and emits a deterministic \`component-catalog.json\` *read model*. For external Temper entries, store binding IDs and verified observed metadata separately, never invented local policy bodies.
+
+### 11.2 Strict separation of four different kinds of status
+
+Do not compress these into a single "active" or "done":
+1. **Lifecycle**: candidate/reviewed/accepted/retired/superseded, with explicit Decision/Gate/Work refs where authoritative.
+2. **Source implementation**: absent/defined/wired/source-tested; tests have actual receipts or say unverified.
+3. **Effective runtime**: unavailable/loaded/observed/independently verified, with process/start time, code+config hashes, freshness.
+4. **Governed external state**: Temper policy/credential/spec and authoritative action state, sourced from authenticated readback or unknown.
+
+An approved candidate isn't automatically deployed; a deployed component isn't automatically routable; documentation isn't permission. A component detail page must always show the distinctions and date of last observed evidence.
+
+### 11.3 Anti-sprawl controls on every component addition/change
+
+The write path for a component change is:
+**find** existing ID/aliases/semantic equivalent and historical retired/rejected/superseded work -> **inspect** dependents, owners, permissions and policies -> **propose** edit or new component + expected user-visible behavior -> **compute impact** (dependents, callers, affected machines/events, tests, state migrations, Temper grants, docs) -> **review/gate** under existing lifecycle -> **implement** co-located code+descriptor+tests -> **validate** graph and enforcement -> **generate** catalog and docs -> **deploy separately** when authorized -> **read back** effective runtime -> **retire/supersede** stale components explicitly.
+
+No automatic new GitHub issue, PR, directory, Plan, schema, policy engine, database or Temper object on every small change. Related additions are packaged in the **existing scoped Work/PR**, with refs linking to the same owner. A change request can touch several components without creating a new project.
+
+At minimum CI rejects:
+- duplicate logical IDs/aliases, unknown kinds, missing required identity/source or unresolved dependency target;
+- dangling relations, self-dependency and forbidden dependency cycles, missing supersession target, retired capabilities still routed;
+- exposed capability without a real host allowlist/auth/Temper boundary or without expected deny/bypass test references;
+- a claim that a rule is blocking/enforced when interception and negative evidence are absent;
+- missing or stale generated Markdown/catalog, conflicting source/effective version assertions, accidental new route bypass of the feedback gate;
+- removed or renamed component with downstream references and no documented migration/supersession.
+CI can enforce *presence/wiring plus test results*, not independently prove a deployed Temper policy or human approval. Implement validator cases and use actual tested runtime receipts for high-risk claims.
+
+### 11.4 One API and one compact management surface
+
+Reuse the **existing authenticated Stately Config/Skills mobile panel**, not a new dashboard/server:
+- **Inventory**: filterable/searchable list of components by kind, owner, lifecycle, effective status and gaps.
+- **Detail**: current declaration, docs, tests/evidence, policy/behavior version, related upstream/downstream components, source link and last effective observation.
+- **Impact**: show "uses", "used by", and affected tests/guards/migrations before a proposed edit; surface conflicts/duplicates/retired identities.
+- **Changes**: show proposed vs reviewed vs source-implemented vs deployed/verified separately, and GitHub Work/PR/Decision links. UI may start read-only; any future mutation must follow approved Stately/Temper path.
+- **Live**: process code/config/machine/behavior, current session state, installed capabilities, connected Temper metadata (fresh or unknown), source/runtime drift.
+Keep graph optional (the typed edges make a later graph view possible without another graph DB). Prioritize compact filterable tables, expandable rows and mobile readability.
+
+Expose one redacted catalog endpoint such as \`GET /api/sessions/:id/components\`, plus component-detail/impact lookup as filters on the same handler if needed, authenticated with the existing session boundary. Reuse the spec's effective-contract API rather than create overlapping separate version/status endpoints. No arbitrary client-provided code or metadata-controlled execution.
+
+### 11.5 Testing the anti-sprawl system
+
+Add these cases to the existing 20-test plan; they are *specified, not run*:
+
+| ID | Input / mutation attempt | Expected proof |
+|---|---|---|
+| T21 | Register duplicate ID/alias or component that repeats an existing logical capability | validation fails or review flags semantic duplicate; no silent second authority |
+| T22 | Reference nonexistent guard, behavior, policy, skill, test or parent component | catalog validation fails with source location |
+| T23 | Rename/remove component used by another behavior or state | impact shows all dependents; fails without migration or supersession |
+| T24 | Retire a capability that is still exposed through a tool route | blocking test/validator fails, no live permission implied |
+| T25 | Two components reference a prohibited dependency cycle | deterministic graph validation fails |
+| T26 | Edit behavior/policy source without regenerating catalog/docs | CI drift check fails |
+| T27 | Repository shows newest component revision but Mac runs older effective SHA | inventory shows source/runtime divergence; no "active" claim |
+| T28 | External Temper policy/spec changes or metadata becomes unavailable | catalog keeps external authority, changes effective status to stale/unknown; no mirrored permit |
+| T29 | Proposed behavior improvement repeats rejected/superseded prior component | lifecycle review shows prior identity, rationale, relevant evidence, and supersession before any activation |
+
+**Efficiency:** catalog generation and graph validation run deterministically in CI/build or on approved activation, not every message; no added model inference, no per-turn remote scans. Serve a cached immutable source graph + separately timed, redacted runtime observation; invalidate only on code/contract version change and bounded refresh of external status. Measure build and UI query latency on growing fixture catalogs (at least 50, 500 and 5,000 entries); do not add a database until measured limitations justify it.
+
+### 11.6 Merge into the EXISTING work packages
+
+- **W0:** add component-source census, duplicate/supersession review and dependency/owner index to current control inventory.
+- **W1:** implement the co-located component descriptors, explicit catalog assembly, deterministic validated JSON/docs and CI drift/relationship checks **together with** the original control registries. This is one implementation, not two registries.
+- **W2/W3:** register actual machine/guard/behavior/verification bindings as they are implemented, then enforce through the existing trusted host and XState paths.
+- **W4:** extend the existing effective-contract mobile/API screen for inventory/detail/impact/status, not a competing UI.
+- **W5:** activation receipts compare catalog source hash, effective process version, independent Temper authority and observed denials/readbacks; migrate/retire replaced components with preserved lineage.
+
+**Anti-sprawl acceptance:** each exposed component has exactly one stable logical ID, one accountable implementation owner, resolved typed links, a reviewed history, a single effective-status view, evidence classification and a discoverable detail page. Any missing item is explicitly a gap, not a silent pass. The catalog is an index and management projection, not an invented source of policy authority.
+
+## 12. Acceptance checklist for the completed feature (NOT current status)
 
 - [ ] Full source-control coverage: every current POLICY/BEHAVIOR clause and behavior has a stable ID, primary owner, enforcement strength, effective status, test refs and source evidence.
 - [ ] All blocking controls are wired on trusted egress/transition paths and have denied + bypass regression tests.
