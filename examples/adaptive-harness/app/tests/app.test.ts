@@ -196,3 +196,114 @@ describe("standalone adaptive harness", () => {
     expect(response.status).toBe(401);
   });
 });
+
+
+describe("runtime agent identity, policy and prompt skills", () => {
+  test("every normal turn receives the Stately system prompt before conversation messages", async () => {
+    const calls: Array<Array<{ role: string; content: string }>> = [];
+    const provider: ChatProvider = {
+      baseUrl: "http://fake/v1",
+      model: "gpt-5.6-luna",
+      configured: true,
+      generate: async (messages) => {
+        calls.push(messages);
+        return { text: "I am Stately, your custom agent.", model: "gpt-5.6-luna" };
+      },
+    };
+    const { app } = await appWith({ provider });
+    const { session: created, cookie } = await session(app);
+    for (const [id, text] of [["identity-1", "Who are you?"], ["identity-2", "And your role?"]]) {
+      const response = await post(app, cookie, `/api/sessions/${created.sessionId}/messages`, {
+        messageId: id, text,
+      });
+      expect(response.status).toBe(200);
+    }
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call[0]?.role).toBe("system");
+      expect(call[0]?.content).toContain("You are **Stately**");
+      expect(call[0]?.content).toContain("pending-only");
+      expect(call[0]?.content).toContain("Runtime behavior contract");
+      expect(call.at(-1)?.role).toBe("user");
+      expect(call.filter((m) => m.role === "system")).toHaveLength(1);
+    }
+    // The current user message must not be duplicated in model context.
+    expect(calls[1]?.filter((m) => m.content === "And your role?")).toHaveLength(1);
+  });
+
+  test("config readback requires a session token and reports real capability statuses", async () => {
+    const { app } = await appWith();
+    const { session: created, cookie } = await session(app);
+    const { host, port } = app.address()!;
+    const endpoint = `http://${host}:${port}/api/sessions/${created.sessionId}/config`;
+    expect((await fetch(endpoint)).status).toBe(401);
+    const response = await fetch(endpoint, { headers: { cookie } });
+    expect(response.status).toBe(200);
+    const config = await response.json();
+    expect(config.name).toBe("Stately");
+    expect(config.version).toMatch(/^[a-f0-9]{16}$/);
+    expect(config.documents.identity).toContain("Stately");
+    expect(config.skills.map((s: { id: string }) => s.id)).toEqual([
+      "inspect-harness",
+      "summarize-session",
+      "draft-feedback-case",
+    ]);
+    expect(config.skills.every((s: { mode: string }) => s.mode === "prompt-only")).toBe(true);
+    expect(config.capabilities.githubCaseFiling).toBe("pending-only");
+    expect(config.capabilities.remoteToolExecution).toBe("not-connected");
+  });
+
+  test("a selected skill affects only the requested turn and unknown names fail closed", async () => {
+    const instructions: string[] = [];
+    const provider: ChatProvider = {
+      baseUrl: "http://fake/v1",
+      model: "fake-model",
+      configured: true,
+      generate: async (messages) => {
+        instructions.push(messages[0]!.content);
+        return { text: "ok", model: "fake-model" };
+      },
+    };
+    const { app } = await appWith({ provider });
+    const { session: created, cookie } = await session(app);
+    const endpoint = `/api/sessions/${created.sessionId}/messages`;
+    const skill = await post(app, cookie, endpoint, {
+      messageId: "skill-1", text: "/skill summarize-session What happened?",
+    });
+    expect(skill.status).toBe(200);
+    expect(instructions[0]).toContain("Selected prompt skill: summarize-session");
+    expect(instructions[0]).toContain("bounded recent");
+
+    const ordinary = await post(app, cookie, endpoint, {
+      messageId: "ordinary-1", text: "Thank you.",
+    });
+    expect(ordinary.status).toBe(200);
+    expect(instructions[1]).not.toContain("Selected prompt skill:");
+
+    const unknown = await post(app, cookie, endpoint, {
+      messageId: "invalid-1", text: "/skill nonexistent Try it",
+    });
+    expect(unknown.status).toBe(400);
+    expect((await unknown.json()).error).toContain("Unknown runtime skill");
+    expect(instructions).toHaveLength(2);
+    const { host, port } = app.address()!;
+    const saved = await fetch(`http://${host}:${port}/api/sessions/${created.sessionId}`, {
+      headers: { cookie },
+    }).then(r => r.json());
+    expect(saved.messages.some((message: { messageId: string }) => message.messageId === "invalid-1")).toBe(false);
+  });
+
+  test("runtime identity is required and deterministic; missing config never silently falls back", async () => {
+    const { loadRuntimeAgentConfig } = await import("../agent-config.js");
+    const one = loadRuntimeAgentConfig();
+    const two = loadRuntimeAgentConfig();
+    expect(one.version).toBe(two.version);
+    const directory = await mkdtemp(join(tmpdir(), "missing-stately-config-"));
+    try {
+      expect(() => loadRuntimeAgentConfig(directory)).toThrow();
+    } finally {
+      const { rm } = await import("node:fs/promises");
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
