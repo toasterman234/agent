@@ -2,6 +2,21 @@
 
 This is a candidate, single-process Node host for the existing feedback-trigger scaffold. It binds to loopback by default, persists sessions and feedback outside the repository, and keeps production GitHub case filing pending-only.
 
+## Runtime identity, policy, and skills (candidate change)
+
+This chat **does not** load the repository-root `AGENTS.md`, which is a coding-agent handoff. Instead the server now loads and fingerprints these **runtime** files once at process startup:
+
+- `agent/AGENTS.md` — Stately identity and conversational instructions
+- `agent/POLICY.md` — truthful capability/authority disclosures (advisory only; actual side-effect gates remain in code)
+- `agent/BEHAVIOR.md` — bounded session state, feedback workflow and skill semantics
+- `agent/SKILLS/*.md` — three **prompt-only**, allowlisted skills: `inspect-harness`, `summarize-session`, `draft-feedback-case`
+
+The configured identity, policy and behavior text is passed as the **first `system` message on every normal Luna response**, including resumed sessions. A turn beginning `/skill <id>` includes the corresponding skill instructions for that turn only. An unknown skill returns HTTP 400 before persisting a user message or invoking the model. These prompt skills are genuinely selectable response procedures, **not** filesystem, GitHub, shell, MCP or autonomous tool integrations. The six upstream repository `skills/` files are development guides and are not active host tools.
+
+After creating a session, select **Agent config & skills** in the mobile header to inspect the running configuration version, loaded documents and available prompt skills. Tapping **Use** inserts the selected `/skill` command into the composer. The authenticated `GET /api/sessions/:sessionId/config` API returns the same nonsecret config and honest capability statuses; unauthenticated requests fail. The public `/healthz` endpoint exposes only the short config hash, not the prompt text.
+
+Missing or invalid runtime files prevent startup rather than silently falling back to generic model behavior. Changes require a reviewed source update **and restart/redeploy of the Mac-hosted service** before mobile sessions use them; merely pushing this branch does not update the live LaunchAgent.
+
 ## Current verified status — 2026-10-24
 
 - Branch: `work/388-feedback-trigger-scaffold`; latest commit: `3fca8d973e6fd8ea759704c6b89d00bc5703f6e2`.
