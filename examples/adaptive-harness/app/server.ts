@@ -27,7 +27,8 @@ import {
   type SessionFeedback,
   type SessionState,
 } from "./session-store.js";
-import { createConversationActor } from "./conversation.machine.js";
+import { callKeyFor, LEGAL_EVENTS_BY_STATE } from "./conversation.machine.js";
+import { SessionMachineStore, type RestoredMachine } from "./session-machine-store.js";
 import { readFile } from "node:fs/promises";
 import { ActivityTracker } from "./activity.js";
 import {
@@ -40,6 +41,7 @@ import {
 import {
   composeBehavior,
   behaviorInstructions,
+  BEHAVIOR_VERSION,
   type BehaviorSelection,
 } from "./behavior-composer.js";
 import {
@@ -175,6 +177,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   const journal = options.journal ?? new FileDispositionJournal(join(dataDirectory, "feedback"));
   const provider = options.provider ?? createProxyProvider();
   const temperGateway = options.temperGateway ?? new TemperGateway();
+  const machineStore = new SessionMachineStore(store);
   // Required configuration is read once at startup; a missing file fails closed.
   const runtimeConfig = options.runtimeConfig ?? loadRuntimeAgentConfig();
   const judge = options.judge ?? createLunaFeedbackJudge(provider);
@@ -245,9 +248,14 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
 
   const processMessage = async (sessionId: string, messageId: string, text: string) =>
     store.withSession(sessionId, async () => {
+      let machine: RestoredMachine | undefined;
+      let initiatedCallKey: string | undefined;
+      let callCompleted = false;
       try {
-        let state = await store.load(sessionId);
-        if (!state) throw Object.assign(new Error("Session not found"), { status: 404 });
+        // Deep state: verify the hash-chained journal, then restore the
+        // durable XState actor (checkpoint, replay, or legacy migration).
+        machine = await machineStore.restore(sessionId);
+        let state = machine.state;
         // Validate allowlisted prompt skills before persisting or calling a model.
         selectRuntimeSkill(text, runtimeConfig);
         const existingUser = state.messages.find(
@@ -265,6 +273,18 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             duplicate: true,
             state,
           };
+        // A Luna call was initiated for this message but no completion or
+        // failure was recorded: at-least-once with local reconciliation —
+        // never blindly retry, never mark done.
+        const pendingCall = machine.record.pendingCall;
+        if (pendingCall && pendingCall.messageId === messageId) {
+          return {
+            kind: "interrupted" as const,
+            reason:
+              "A model call for this message was initiated but its outcome was never recorded; reconciliation is required before any retry",
+            state,
+          };
+        }
         if (existingUser) {
           const pending = state.feedback.find(
             (item) => item.messageId === messageId && item.status === "pending",
@@ -279,32 +299,86 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         }
         activity.start(sessionId, messageId, provider.model);
         activity.mark(sessionId, "checking-feedback");
-        if (!existingUser) {
-          state = await store.appendUnlocked(sessionId, [
-            {
-              type: "message.user",
-              message: { messageId, role: "user", text, createdAt: new Date().toISOString() },
-            },
-          ]);
+
+        let resumed = false;
+        if (machine.value === "blocked") {
+          const resolved = state.feedback.find((item) => item.messageId === messageId);
+          if (
+            resolved &&
+            (resolved.status === "dismissed" || resolved.status === "filed") &&
+            machine.context.pendingFeedback?.messageId === messageId
+          ) {
+            await machine.apply({
+              type: resolved.status === "dismissed" ? "FEEDBACK_DISMISSED" : "FEEDBACK_FILED",
+            });
+            resumed = true;
+            state = machine.state;
+          } else {
+            throw Object.assign(
+              new Error("Session is blocked on pending feedback that must be resolved first"),
+              { status: 409 },
+            );
+          }
+        } else if (machine.value === "interrupted") {
+          if (existingUser && machine.context.lastMessageId === messageId) {
+            // Explicitly failed call (CALL_FAILED recorded): a same-id retry
+            // is a host decision, journaled as RESUME_TURN.
+            await machine.apply({ type: "RESUME_TURN", messageId });
+            state = machine.state;
+          }
+          // Otherwise a new message supersedes the interrupted turn; the
+          // interrupted call stays in the journal and RECEIVE is legal.
+        }
+        if (!resumed && (machine.value === "reviewing" || machine.value === "generating")) {
+          if (machine.context.lastMessageId !== messageId)
+            throw Object.assign(new Error("Session has another turn in progress"), {
+              status: 409,
+            });
+          // Mid-turn restore (crash before the call was initiated): continue
+          // this same turn below; do not journal duplicate RECEIVE events.
+        } else if (!resumed) {
+          if (!existingUser) {
+            state = await store.appendUnlocked(sessionId, [
+              {
+                type: "message.user",
+                message: { messageId, role: "user", text, createdAt: new Date().toISOString() },
+              },
+            ]);
+            await machine.adopt(state);
+          }
+          // Illegal/unknown/stale transitions are rejected inside apply()
+          // (actor.can) with 409 — before any model call.
+          await machine.apply({ type: "RECEIVE_MESSAGE", messageId, text });
+          state = machine.state;
         }
         const selection =
           state.behavior?.messageId === messageId
             ? state.behavior
             : composeBehavior(state, messageId, text).selection;
+        if (machine.context.selectedBehavior !== selection.behaviorId) {
+          if (state.behavior?.messageId !== messageId) {
+            state = await store.appendUnlocked(sessionId, [
+              { type: "behavior.selected", selection },
+            ]);
+            await machine.adopt(state);
+          }
+          await machine.apply({
+            type: "SELECT_BEHAVIOR",
+            messageId,
+            behaviorId: selection.behaviorId,
+            goal: selection.goal,
+            phase: selection.phase,
+          });
+          state = machine.state;
+        }
+        if (machine.context.selectedBehavior !== selection.behaviorId)
+          throw Object.assign(new Error("XState rejected proposed behavior"), { status: 409 });
         const incoming: IncomingMessage = {
           sessionId,
           messageId,
           text,
           context: state.messages.map((item) => ({ role: item.role, text: item.text })),
         };
-        const actor = createConversationActor(sessionId);
-        actor.start();
-        actor.send({ type: "RECEIVE_MESSAGE", messageId, text });
-        actor.send({ type: "SELECT_BEHAVIOR", messageId, behaviorId: selection.behaviorId });
-        if (actor.getSnapshot().context.selectedBehavior !== selection.behaviorId)
-          throw Object.assign(new Error("XState rejected proposed behavior"), { status: 409 });
-        if (state.behavior?.messageId !== messageId)
-          state = await store.appendUnlocked(sessionId, [{ type: "behavior.selected", selection }]);
         const gated = createGatedTurnHost(
           {
             judge: {
@@ -317,13 +391,18 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             ...(options.caseSink ? { caseSink: options.caseSink } : {}),
           },
           async () => {
+            // Record the call intent with its stable callKey BEFORE the
+            // provider runs; completion is journaled as MODEL_RESPONSE.
+            const callKey = callKeyFor(sessionId, messageId);
+            await machine!.apply({ type: "CALL_INITIATED", messageId, callKey });
+            initiatedCallKey = callKey;
             const result = await normalTurn(state!, incoming, selection)();
             return result;
           },
         );
         const result = await gated(incoming);
         if (result.kind === "blocked") {
-          actor.send({
+          await machine.apply({
             type: "FEEDBACK_PENDING",
             feedback: {
               messageId,
@@ -335,6 +414,9 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             state = await recordFeedback(sessionId, result.feedback.disposition, true);
           const trace = activity.finish(sessionId, "blocked");
           if (trace) state = await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]);
+          await machine.adopt(state);
+          await machine.checkpoint();
+          state = machine.state;
           const feedback = state.feedback.find((item) => item.messageId === messageId) ?? {
             messageId,
             status: "pending" as const,
@@ -349,28 +431,34 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             state,
           };
         }
-        actor.send({ type: "REVIEW_PASSED" });
+        if (machine.value === "reviewing") await machine.apply({ type: "REVIEW_PASSED" });
         const assistant = {
           messageId: `assistant-${messageId}`,
           role: "assistant" as const,
           text: result.result.text,
           createdAt: new Date().toISOString(),
         };
-        actor.send({
-          type: "MODEL_RESPONSE",
-          messageId: assistant.messageId,
-          text: assistant.text,
-        });
         state = await store.appendUnlocked(sessionId, [
           {
             type: "message.assistant",
             message: assistant,
           },
         ]);
+        await machine.adopt(state);
+        await machine.apply({
+          type: "MODEL_RESPONSE",
+          messageId: assistant.messageId,
+          text: assistant.text,
+        });
+        callCompleted = true;
+        state = machine.state;
         if (result.feedback.status !== "no-trigger")
           state = await recordFeedback(sessionId, result.feedback.disposition, true);
         const trace = activity.finish(sessionId, "completed");
         if (trace) state = await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]);
+        await machine.adopt(state);
+        await machine.checkpoint();
+        state = machine.state;
         return {
           kind: "response" as const,
           text: result.result.text,
@@ -378,6 +466,19 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           state,
         };
       } catch (error) {
+        if (machine && initiatedCallKey && !callCompleted) {
+          // The provider call finished with an error we observed: record the
+          // failure explicitly so the turn is interrupted, not "initiated".
+          await machine
+            .apply({
+              type: "CALL_FAILED",
+              messageId,
+              callKey: initiatedCallKey,
+              reason: "provider-error",
+            })
+            .catch(() => {});
+          await machine.checkpoint().catch(() => {});
+        }
         const trace = activity.finish(sessionId, "failed");
         if (trace) {
           // Failure telemetry is best-effort: never mask the original failure
@@ -551,6 +652,40 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       const sessionId = parts[2];
       if (!authenticatedSession(request, sessionId))
         return json(response, 401, { error: "Session authentication required" });
+      if (request.method === "GET" && parts.length === 4 && parts[3] === "state") {
+        // Redacted durable machine view: state value + metadata only. No raw
+        // snapshots, no actor handle, nothing secret-bearing.
+        const existing = await store.load(sessionId);
+        if (!existing) return json(response, 404, { error: "Session not found" });
+        const machine = await machineStore.restore(sessionId);
+        const record = machine.record;
+        const context = machine.context;
+        return json(response, 200, {
+          sessionId,
+          state: record.status,
+          machineState: record.value,
+          machineId: record.machineId,
+          machineVersion: record.machineVersion,
+          policyVersion: runtimeConfig.version,
+          behaviorVersion: existing.behavior?.version ?? BEHAVIOR_VERSION,
+          behaviorId: context.activeBehaviorId ?? context.selectedBehavior,
+          activeGoal: context.activeGoal,
+          activePhase: context.activePhase,
+          revision: record.revision,
+          lastAppliedSeq: record.lastAppliedSeq,
+          journalEventCount: record.journalEventCount,
+          legalNextEvents: LEGAL_EVENTS_BY_STATE[record.value] ?? [],
+          pending: {
+            feedback: record.pendingFeedback,
+            call: record.pendingCall,
+            reconciliationNeeded: record.reconciliationNeeded,
+          },
+          migrated: record.migrated,
+          checkpointUsed: record.checkpointUsed,
+          checkpointDiscarded: record.checkpointDiscarded,
+          lastCheckpointAt: record.lastCheckpointAt,
+        });
+      }
       if (request.method === "GET" && parts.length === 4 && parts[3] === "behavior") {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
@@ -607,6 +742,12 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             feedback: result.feedback,
             session: sessionView(result.state),
           });
+        if (result.kind === "interrupted")
+          return json(response, 409, {
+            status: "interrupted",
+            error: result.reason,
+            session: sessionView(result.state),
+          });
         return json(response, 200, {
           status: "response",
           duplicate: result.duplicate ?? false,
@@ -624,6 +765,8 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         const result = await handleDisposition(request, sessionId, parts[4]!);
         if (result.kind === "blocked")
           return json(response, 409, { status: "blocked", feedback: result.feedback });
+        if (result.kind === "interrupted")
+          return json(response, 409, { status: "interrupted", error: result.reason });
         return json(response, 200, {
           status: "response",
           text: result.text,

@@ -1,6 +1,6 @@
 # Durable XState session lifecycle — executable implementation specification
 
-**Status:** planned and documented; **not implemented** in the current Stately harness. This is the next bounded work item on existing draft [PR #1](https://github.com/toasterman234/agent/pull/1), following the already CI-verified Tardigrade atom composer. Do not treat persistent `behavior.selected` as a persisted XState actor. Do not open another competing agent runtime or canonical event log.
+**Status:** implemented in source (machine v2 restore/replay, items 1–5 of the work list) as of 2026-10-24 on the deep-state work branch; **source-verified, rollout pending** — not deployed to the live Mac LaunchAgent, which still runs the prior build until a separate authorized rollout. Tests: `app/tests/deep-state.test.ts` plus the existing harness suites. This is the next bounded work item on existing draft [PR #1](https://github.com/toasterman234/agent/pull/1), following the already CI-verified Tardigrade atom composer. Do not treat persistent `behavior.selected` as a persisted XState actor. Do not open another competing agent runtime or canonical event log.
 
 ## Objective
 

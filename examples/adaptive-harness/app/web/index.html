@@ -268,6 +268,7 @@
         <div id="behavior-meta" aria-live="off">
           Behavior: conversation · awaiting first message
         </div>
+        <div id="machine-meta" aria-live="off">Machine: restoring…</div>
         <details>
           <summary>Turn trace</summary>
           <ol id="activity-steps"></ol>
@@ -324,6 +325,7 @@
       const activityDot = document.querySelector("#activity-dot");
       const activityMeta = document.querySelector("#activity-meta");
       const behaviorMeta = document.querySelector("#behavior-meta");
+      const machineMeta = document.querySelector("#machine-meta");
       const activitySteps = document.querySelector("#activity-steps");
       const sendButton = document.querySelector("#send-button");
       const temperForm = document.querySelector("#temper-form");
@@ -436,7 +438,21 @@
         messages.append(node);
         messages.scrollTop = messages.scrollHeight;
       };
+      const refreshMachineState = async () => {
+        if (!session) return;
+        try {
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/state`,
+          );
+          if (!response.ok) return;
+          const m = await response.json();
+          machineMeta.textContent = `Machine: ${m.state} · v${m.machineVersion} · rev ${m.revision} · next: ${(m.legalNextEvents ?? []).join(", ") || "none"}${m.pending?.reconciliationNeeded ? " · reconciliation needed" : ""}${m.lastCheckpointAt ? ` · checkpoint ${m.lastCheckpointAt}` : ""}`;
+        } catch {
+          // Machine state display is best-effort; chat remains usable.
+        }
+      };
       const render = (data) => {
+        void refreshMachineState();
         const behavior = data.behavior;
         behaviorMeta.textContent = behavior
           ? `Behavior: ${behavior.behaviorId} · intent: ${behavior.intent} · ${behavior.phase} · goal: ${behavior.goal ?? "none"}`
