@@ -13,14 +13,21 @@ const previous: BehaviorSelection = {
   reason: "initial",
 };
 const messages = [
-  { messageId: "m1", role: "user" as const, text: "Finish the existing Stately agent integration", createdAt: "" },
+  {
+    messageId: "m1",
+    role: "user" as const,
+    text: "Finish the existing Stately agent integration",
+    createdAt: "",
+  },
   { messageId: "assistant-m1", role: "assistant" as const, text: "Working", createdAt: "" },
 ];
 
 describe("Tardigrade atoms: context-derived behavior projection", () => {
   test("continue preserves previous goal and proposes a typed behavior", () => {
     const { selection, instruction } = composeBehavior(
-      { messages, behavior: previous }, "m2", "continue with the same task",
+      { messages, behavior: previous },
+      "m2",
+      "continue with the same task",
     );
     expect(selection).toMatchObject({
       messageId: "m2",
@@ -36,7 +43,9 @@ describe("Tardigrade atoms: context-derived behavior projection", () => {
 
   test("verification changes phase but preserves goal", () => {
     const { selection } = composeBehavior(
-      { messages, behavior: previous }, "m3", "Verify it first",
+      { messages, behavior: previous },
+      "m3",
+      "Verify it first",
     );
     expect(selection).toMatchObject({
       intent: "verify",
@@ -49,16 +58,16 @@ describe("Tardigrade atoms: context-derived behavior projection", () => {
 
   test("status does not claim external source access", () => {
     const { selection, instruction } = composeBehavior(
-      { messages, behavior: previous }, "m3", "What's the status?",
+      { messages, behavior: previous },
+      "m3",
+      "What's the status?",
     );
     expect(selection.behaviorId).toBe("status-check");
     expect(instruction).toContain("unverified live status");
   });
 
   test("message with no previous goal does not invent an execution continuation", () => {
-    const { selection } = composeBehavior(
-      { messages: [], behavior: null }, "m1", "Continue",
-    );
+    const { selection } = composeBehavior({ messages: [], behavior: null }, "m1", "Continue");
     expect(selection.behaviorId).toBe("conversation");
     expect(selection.goal).toBe("Continue");
   });
