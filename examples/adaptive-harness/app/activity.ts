@@ -60,7 +60,11 @@ export class ActivityTracker {
     const active = this.active.get(sessionId);
     if (!active) return;
     const now = Date.now();
-    active.steps.push({ stage, at: new Date(now).toISOString(), elapsedMs: now - active.startedMs });
+    active.steps.push({
+      stage,
+      at: new Date(now).toISOString(),
+      elapsedMs: now - active.startedMs,
+    });
     active.lastChangedMs = now;
     if (usage) active.usage = usage;
   }
