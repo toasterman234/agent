@@ -48,6 +48,14 @@ The process prints a URL only after its listener is bound. `GET /healthz` return
 
 For a private mobile pilot, keep the Node host on loopback and use Tailscale Serve (never Funnel). Set `STATELY_ALLOWED_ORIGINS` to the exact HTTPS Serve origin, then verify `/healthz` and the browser flow from a phone that is signed into the same tailnet. Tailscale ACLs are the network boundary; this candidate has no application user-login system.
 
+## Live activity, liveness and traces
+
+The mobile chat now shows a **host-reported activity strip** above the messages while a response is in progress. It reports stages for receipt, feedback checking, feedback judgment (when triggered), waiting on Luna, saving, completion, blocked feedback, and failures. The elapsed timer and **last stage change age** help distinguish a slow model request from a connection failure. This is **not** chain-of-thought, model-internal step streaming, token-by-token output, or a live health probe of the remote model: while `calling-luna` is shown, the host is simply awaiting the model's response.
+
+Tap **Turn trace** to see timestamped stage transitions relative to turn start. Completed, blocked, and failed turn traces are stored with the existing hash-chained session journal (latest 30 kept in its derived state); they include only stage/timing metadata, model name and token usage if the provider returns it, **never prompts, reply text, error bodies, or credentials**.
+
+`GET /api/sessions/:sessionId/activity` requires the same session authentication as chat. It returns an in-memory `active` turn snapshot (null when idle), up to 12 recent persisted turn traces, server uptime, and the last host-observed state. While the message POST is awaiting Luna, the phone polls this endpoint approximately every 850ms without invoking any additional model calls. The active snapshot is ephemeral: if the host crashes during a turn, no new final trace is guaranteed, but earlier completed traces remain persisted. This is intentionally lightweight single-host observability; it does not add an external trace collector or claim distributed liveness. It also avoids disclosing intermediate model reasoning.
+
 ## API and behavior
 
 The only inbound message route is `POST /api/sessions/:sessionId/messages`. Sessions are created by `POST /api/sessions` and use an HttpOnly, SameSite cookie. A same-origin check rejects browser origins other than the configured local origin. Every message must carry a stable `messageId`; duplicate completed IDs return the persisted response, while reused IDs with different text are rejected.
