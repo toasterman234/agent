@@ -316,11 +316,12 @@ describe("runtime agent identity, policy and prompt skills", () => {
   });
 });
 
-
 describe("authenticated live activity and persistent host traces", () => {
   test("exposes live Luna wait, elapsed time and a durable completion trace without extra calls", async () => {
     let release!: () => void;
-    const latch = new Promise<void>((resolve) => { release = resolve; });
+    const latch = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let calls = 0;
     const provider: ChatProvider = {
       baseUrl: "http://fake/v1",
@@ -342,19 +343,24 @@ describe("authenticated live activity and persistent host traces", () => {
     const url = `http://${host}:${port}/api/sessions/${created.sessionId}/activity`;
     expect((await fetch(url)).status).toBe(401);
     const running = post(app, cookie, `/api/sessions/${created.sessionId}/messages`, {
-      messageId: "trace-m1", text: "Do a task",
+      messageId: "trace-m1",
+      text: "Do a task",
     });
     try {
-      await expect.poll(async () => {
-        const response = await fetch(url, { headers: { cookie } });
-        return (await response.json()).active?.stage;
-      }).toBe("calling-luna");
+      await expect
+        .poll(async () => {
+          const response = await fetch(url, { headers: { cookie } });
+          return (await response.json()).active?.stage;
+        })
+        .toBe("calling-luna");
       const inFlight = await fetch(url, { headers: { cookie } }).then((r) => r.json());
       expect(inFlight.agentState).toBe("calling-luna");
       expect(inFlight.active.messageId).toBe("trace-m1");
       expect(inFlight.active.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(inFlight.active.steps.map((s: { stage: string }) => s.stage)).toEqual([
-        "received", "checking-feedback", "calling-luna",
+        "received",
+        "checking-feedback",
+        "calling-luna",
       ]);
       expect(inFlight.active).not.toHaveProperty("prompt");
       expect(inFlight.active).not.toHaveProperty("response");
@@ -368,7 +374,9 @@ describe("authenticated live activity and persistent host traces", () => {
     expect(complete.active).toBeNull();
     expect(complete.agentState).toBe("idle");
     expect(complete.recent[0]).toMatchObject({
-      messageId: "trace-m1", status: "completed", model: "gpt-5.6-luna",
+      messageId: "trace-m1",
+      status: "completed",
+      model: "gpt-5.6-luna",
       usage: { totalTokens: 21 },
     });
     expect(complete.recent[0].steps.at(-1).stage).toBe("completed");
@@ -379,12 +387,19 @@ describe("authenticated live activity and persistent host traces", () => {
   test("shows judge stage, then a pending feedback trace without calling normal Luna generation", async () => {
     let release!: (result: { kind: "case"; reason: string; category: "verification" }) => void;
     const latch = new Promise<{ kind: "case"; reason: string; category: "verification" }>(
-      (resolve) => { release = resolve; },
+      (resolve) => {
+        release = resolve;
+      },
     );
     let normalCalls = 0;
     const provider: ChatProvider = {
-      baseUrl: "http://fake/v1", model: "fake-model", configured: true,
-      generate: async () => { normalCalls += 1; return { text: "not allowed", model: "fake-model" }; },
+      baseUrl: "http://fake/v1",
+      model: "fake-model",
+      configured: true,
+      generate: async () => {
+        normalCalls += 1;
+        return { text: "not allowed", model: "fake-model" };
+      },
     };
     const { app } = await appWith({
       provider,
@@ -394,14 +409,23 @@ describe("authenticated live activity and persistent host traces", () => {
     const { host, port } = app.address()!;
     const url = `http://${host}:${port}/api/sessions/${created.sessionId}/activity`;
     const running = post(app, cookie, `/api/sessions/${created.sessionId}/messages`, {
-      messageId: "candidate", text: "???",
+      messageId: "candidate",
+      text: "???",
     });
     try {
-      await expect.poll(async () =>
-        fetch(url, { headers: { cookie } }).then((r) => r.json()).then((v) => v.active?.stage),
-      ).toBe("judging-feedback");
+      await expect
+        .poll(async () =>
+          fetch(url, { headers: { cookie } })
+            .then((r) => r.json())
+            .then((v) => v.active?.stage),
+        )
+        .toBe("judging-feedback");
     } finally {
-      release({ kind: "case", reason: "Evidence of a verification error", category: "verification" });
+      release({
+        kind: "case",
+        reason: "Evidence of a verification error",
+        category: "verification",
+      });
     }
     expect((await running).status).toBe(409);
     const result = await fetch(url, { headers: { cookie } }).then((r) => r.json());
@@ -413,14 +437,23 @@ describe("authenticated live activity and persistent host traces", () => {
 
   test("errors become redacted failed traces with no raw provider secrets", async () => {
     const provider: ChatProvider = {
-      baseUrl: "http://fake/v1", model: "fake-model", configured: true,
-      generate: async () => { throw new Error("secret: private credential material"); },
+      baseUrl: "http://fake/v1",
+      model: "fake-model",
+      configured: true,
+      generate: async () => {
+        throw new Error("secret: private credential material");
+      },
     };
     const { app } = await appWith({ provider });
     const { session: created, cookie } = await session(app);
-    expect((await post(app, cookie, `/api/sessions/${created.sessionId}/messages`, {
-      messageId: "failed-1", text: "Hello",
-    })).status).toBe(500);
+    expect(
+      (
+        await post(app, cookie, `/api/sessions/${created.sessionId}/messages`, {
+          messageId: "failed-1",
+          text: "Hello",
+        })
+      ).status,
+    ).toBe(500);
     const { host, port } = app.address()!;
     const activity = await fetch(
       `http://${host}:${port}/api/sessions/${created.sessionId}/activity`,
