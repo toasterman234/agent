@@ -30,7 +30,11 @@ import {
 import { createConversationActor } from "./conversation.machine.js";
 import { readFile } from "node:fs/promises";
 import { ActivityTracker } from "./activity.js";
-import { composeBehavior, behaviorInstructions, type BehaviorSelection } from "./behavior-composer.js";
+import {
+  composeBehavior,
+  behaviorInstructions,
+  type BehaviorSelection,
+} from "./behavior-composer.js";
 import {
   loadRuntimeAgentConfig,
   runtimeConfigView,
@@ -208,21 +212,25 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           },
         ]);
 
-  const normalTurn = (state: SessionState, message: IncomingMessage, behavior: BehaviorSelection) => async () => {
-    const skill = selectRuntimeSkill(message.text, runtimeConfig);
-    const context: ProviderMessage[] = [
-      { role: "system", content: `${systemInstructions(runtimeConfig, skill)}\n\n${behaviorInstructions(behavior)}` },
-      ...state.messages
-        .filter((item) => item.messageId !== message.messageId)
-        .slice(-10)
-        .map((item) => ({ role: item.role, content: item.text })),
-      { role: "user", content: message.text },
-    ];
-    activity.mark(message.sessionId, "calling-luna");
-    const result = await provider.generate(context, { maxOutputTokens: 512 });
-    activity.mark(message.sessionId, "saving-response", result.usage);
-    return result;
-  };
+  const normalTurn =
+    (state: SessionState, message: IncomingMessage, behavior: BehaviorSelection) => async () => {
+      const skill = selectRuntimeSkill(message.text, runtimeConfig);
+      const context: ProviderMessage[] = [
+        {
+          role: "system",
+          content: `${systemInstructions(runtimeConfig, skill)}\n\n${behaviorInstructions(behavior)}`,
+        },
+        ...state.messages
+          .filter((item) => item.messageId !== message.messageId)
+          .slice(-10)
+          .map((item) => ({ role: item.role, content: item.text })),
+        { role: "user", content: message.text },
+      ];
+      activity.mark(message.sessionId, "calling-luna");
+      const result = await provider.generate(context, { maxOutputTokens: 512 });
+      activity.mark(message.sessionId, "saving-response", result.usage);
+      return result;
+    };
 
   const processMessage = async (sessionId: string, messageId: string, text: string) =>
     store.withSession(sessionId, async () => {
@@ -268,9 +276,10 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             },
           ]);
         }
-        const selection = state.behavior?.messageId === messageId
-          ? state.behavior
-          : composeBehavior(state, messageId, text).selection;
+        const selection =
+          state.behavior?.messageId === messageId
+            ? state.behavior
+            : composeBehavior(state, messageId, text).selection;
         const incoming: IncomingMessage = {
           sessionId,
           messageId,
@@ -459,7 +468,11 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       if (request.method === "GET" && parts.length === 4 && parts[3] === "behavior") {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
-        return json(response, 200, { selected: state.behavior, source: "session-journal", composer: "tardie/atoms" });
+        return json(response, 200, {
+          selected: state.behavior,
+          source: "session-journal",
+          composer: "tardie/atoms",
+        });
       }
       if (request.method === "GET" && parts.length === 4 && parts[3] === "activity") {
         const state = await store.load(sessionId);
