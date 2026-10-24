@@ -85,16 +85,56 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
-      small { color: #aeb8ca; }
-      #config-toggle { margin-top: .75rem; padding: .45rem .75rem; background: #283349; }
-      #config-panel { padding: .8rem 1rem; background: #19212d; border-bottom: 1px solid #303746; max-height: 48vh; overflow: auto; }
-      #config-panel[hidden] { display: none; }
-      #config-panel pre { white-space: pre-wrap; font: .78rem/1.45 ui-monospace, monospace; overflow-wrap: anywhere; }
-      #config-panel details { margin: .65rem 0; }
-      #config-skills { display: grid; gap: .6rem; }
-      .skill-row { display: flex; gap: .75rem; align-items: center; justify-content: space-between; background: #242b38; border-radius: .65rem; padding: .6rem; }
-      .skill-row button { flex-shrink: 0; font-size: .85rem; padding: .45rem; }
-      #config-summary { color: #aeb8ca; font-size: .9rem; }
+      small {
+        color: #aeb8ca;
+      }
+      #config-toggle {
+        margin-top: 0.75rem;
+        padding: 0.45rem 0.75rem;
+        background: #283349;
+      }
+      #config-panel {
+        padding: 0.8rem 1rem;
+        background: #19212d;
+        border-bottom: 1px solid #303746;
+        max-height: 48vh;
+        overflow: auto;
+      }
+      #config-panel[hidden] {
+        display: none;
+      }
+      #config-panel pre {
+        white-space: pre-wrap;
+        font:
+          0.78rem/1.45 ui-monospace,
+          monospace;
+        overflow-wrap: anywhere;
+      }
+      #config-panel details {
+        margin: 0.65rem 0;
+      }
+      #config-skills {
+        display: grid;
+        gap: 0.6rem;
+      }
+      .skill-row {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        justify-content: space-between;
+        background: #242b38;
+        border-radius: 0.65rem;
+        padding: 0.6rem;
+      }
+      .skill-row button {
+        flex-shrink: 0;
+        font-size: 0.85rem;
+        padding: 0.45rem;
+      }
+      #config-summary {
+        color: #aeb8ca;
+        font-size: 0.9rem;
+      }
     </style>
   </head>
   <body>
@@ -102,15 +142,33 @@
       <header>
         <strong>Stately adaptive harness</strong><br /><small id="status"
           >Starting local session…</small
-        ><div><button id="config-toggle" type="button" aria-expanded="false">Agent config &amp; skills</button></div>
-      <section id="config-panel" hidden aria-label="Active runtime configuration">
-        <div id="config-summary">Loading runtime configuration…</div>
-        <details><summary>Identity (AGENTS.md)</summary><pre id="config-identity"></pre></details>
-        <details><summary>Policy</summary><pre id="config-policy"></pre></details>
-        <details><summary>Behavior</summary><pre id="config-behavior"></pre></details>
-        <strong>Available prompt skills</strong><div id="config-skills"></div>
-        <small>Prompt skills guide replies only. No shell, file-edit, remote tools or GitHub case-filing capability is attached.</small>
-      </section>
+        >
+        <div>
+          <button id="config-toggle" type="button" aria-expanded="false">
+            Agent config &amp; skills
+          </button>
+        </div>
+        <section id="config-panel" hidden aria-label="Active runtime configuration">
+          <div id="config-summary">Loading runtime configuration…</div>
+          <details>
+            <summary>Identity (AGENTS.md)</summary>
+            <pre id="config-identity"></pre>
+          </details>
+          <details>
+            <summary>Policy</summary>
+            <pre id="config-policy"></pre>
+          </details>
+          <details>
+            <summary>Behavior</summary>
+            <pre id="config-behavior"></pre>
+          </details>
+          <strong>Available prompt skills</strong>
+          <div id="config-skills"></div>
+          <small
+            >Prompt skills guide replies only. No shell, file-edit, remote tools or GitHub
+            case-filing capability is attached.</small
+          >
+        </section>
       </header>
       <section id="messages" aria-live="polite"></section>
       <footer>
