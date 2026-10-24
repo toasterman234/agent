@@ -244,111 +244,137 @@ Property-based/state-model tests: generate sequences of valid/invalid events, co
 - Explicitly excluded: autonomous policy approval, privileged Temper effects, universal sandbox/OS egress guarantee, remote GitHub Case filing, Temper policy/spec hot-deploy, human-approver UX without identity proof, rewriting agent core, adding unrelated platforms, and claiming all free-form language is deterministically provable.
 - If any authorized Mac-control-plane workflow or bypass behaves incorrectly during a future rollout, record evidence and open an issue in toasterman234/github-workflows-control-plane. No Mac access is used in the authoring of this spec.
 
-## 11. Anti-sprawl: one component catalog, not another runtime
+## 11. Anti-sprawl: one versioned Agent Assembly, dependency contracts and change impact
 
-**Decision for review:** Extend the existing W0/W1 implementation with one Stately **Component Catalog**. The catalog is an indexed, typed projection of the **actual** Stately declarations and external authoritative metadata, not a fourth execution engine, a competing canonical store or a general-purpose ontology platform. This is essential for managing a growing collection of policy/behavior/skills/capabilities and must not become a separate new project.
+**Primary design decision for review:** An assembly of the **existing executable implementations** is the unit of ownership, activation, upgrade and testing. A component registry/catalog is a generated **projection** of this assembly, NOT another source of truth, database, management UI or framework. Keep everything in examples/adaptive-harness/app and reuse W0–W5. This deliberately supersedes the previous UI/catalog-first framing.
 
-### 11.1 Object model and ownership
+### 11.1 Connect components at one explicit composition root
 
-A catalog entry is one logical component with immutable stable ID across revisions, current source reference, owner, lifecycle, interface, dependencies and tests. Component **kinds** are a controlled discriminator, not different incompatible schema/store subsystems:
-- policy, rule, constraint, behavior, state_machine, state, transition, prompt, skill, capability, tool, integration, context_source, memory_binding, evaluation, verifier, documentation_view (add another kind only with explicit need);
-- components may be granular, but not every ordinary TypeScript function becomes a component. Create entries for independently governed, configured, exposed, tested or reused things. Private implementation helpers remain code.
-- relationships use a small vocabulary: \`depends_on\`, \`invokes\`, \`governed_by\`, \`implemented_by\`, \`enforced_at\`, \`tested_by\`, \`verified_by\`, \`produces\`, \`replaces\`, \`conflicts_with\`. Every target ID resolves within the catalog or to a documented typed external \`temper://\`, canonical ref or issue/PR/source evidence URI.
-- **stable identity != revision**: an ID is never reused for a different concept. Record replacement/supersession with a link, and preserve retired history. A content/commit SHA identifies immutable revisions; the current pointer is explicit.
-- A component can provide several capabilities; one capability can be consumed by several behaviors. Avoid cloning a policy for each caller.
-
-Suggested co-located descriptor contract (illustrative, not runtime grant):
+Create one \`app/agent-assembly.ts\` (name provisional), with explicit code references to the existing system:
 
 ~~~ts
-type ComponentKind =
-  | "policy" | "rule" | "behavior" | "state_machine" | "skill"
-  | "capability" | "tool" | "integration" | "verifier" | "evaluation"
-  | "prompt" | "context_source" | "memory_binding";
-type ComponentRelationship = {
-  kind: "depends_on" | "invokes" | "governed_by" | "implemented_by"
-      | "enforced_at" | "tested_by" | "verified_by" | "replaces" | "conflicts_with";
-  target: string;
-};
-type ComponentDescriptor = {
-  id: string; kind: ComponentKind; title: string;
-  description: string;
-  source: { path: string; exportName?: string };
-  owner: "stately-host" | "xstate" | "tardigrade" | "temper" | "prompt";
-  implementationRef?: string;  // real exported guard/transition/tool binding
-  relations: ComponentRelationship[];
-  lifecycle: "candidate" | "approved" | "retired";
-  tests: string[]; evidenceRefs: string[];
-  externalAuthorityRef?: string; // never interpreted as a local permit
-};
+// TARGET SHAPE — conceptual, not currently implemented.
+export const statelyAssembly = defineAgentAssembly({
+  identity: statelyIdentity, // existing agent-config
+  sessionMachine: conversationMachine, // the actual XState graph
+  behaviorSelector: composeBehavior, // existing Tardigrade atoms
+  feedbackGate: createGatedTurnHost, // existing host interception
+  capabilityGateway: temperGateway, // existing host-controlled read-only Temper
+  features: [conversationFeature, feedbackFeature, verificationFeature],
+});
 ~~~
 
-The authoritative **definitions** remain in the code and external deployed Temper; the catalog doesn't reimplement guards. Keep descriptors co-located with their real implementation module, export registered descriptors through one explicit \`app/components/index.ts\` build manifest (avoid magic filesystem scanning with side effects). A simple build step resolves and validates references and emits a deterministic \`component-catalog.json\` *read model*. For external Temper entries, store binding IDs and verified observed metadata separately, never invented local policy bodies.
+- **Explicit wiring**, not reflection or dynamic, model-authored imports. Only a reviewed source change changes installed features and/or XState graph.
+- \`defineAgentAssembly\` is a tiny local TypeScript validation/composition helper, **not** a new agent runtime. The current server continues to run Luna, XState, Tardigrade, existing SessionStore and TemperGateway.
+- Each feature is a **cohesive slice** that binds together its concrete code and metadata: behavior selector ID, legal machine states/events, host guard/validator, prompt or skill instructions, optional external capability requirements and proof tests. A feature may use existing shared components rather than duplicating them.
+- Important limitation: XState does **not** magically install new state nodes from an arbitrary manifest. A new state/transition is an explicit code update to conversation.machine.ts, with version/migration as necessary. Assembly validation checks that feature references and machine declarations agree.
+- Co-locate feature descriptors with their real implementations or a small adjacent feature descriptor. Only independently configured, enforceable, exposed or reusable mechanisms receive catalog identities; do not register every helper function.
+- Treat provider, owner and responsibility as **single-writer** for authoritative state: XState/host = local session; Temper = governed external authorization/action entities; Tardigrade = recomputable selection; SessionStore = one append-only local record. No duplicated policy decision or independent mutable state.
 
-### 11.2 Strict separation of four different kinds of status
+### 11.2 Typed provides/requires/connects edges
 
-Do not compress these into a single "active" or "done":
-1. **Lifecycle**: candidate/reviewed/accepted/retired/superseded, with explicit Decision/Gate/Work refs where authoritative.
-2. **Source implementation**: absent/defined/wired/source-tested; tests have actual receipts or say unverified.
-3. **Effective runtime**: unavailable/loaded/observed/independently verified, with process/start time, code+config hashes, freshness.
-4. **Governed external state**: Temper policy/credential/spec and authoritative action state, sourced from authenticated readback or unknown.
+Each feature declares a stable ID, version, provided interfaces/capabilities, required interfaces/capabilities, bound entrypoints and tests. Narrow link types include \`provides\`, \`requires\`, \`selects\`, \`guards\`, \`transitioned_by\`, \`invokes\`, \`authorized_by\`, \`verified_by\`, \`supersedes\`. These refer to **actual typed implementations**, not only prose strings. An external Temper policy/capability reference is **descriptive/required authority**; only live Temper authorizes its requests.
 
-An approved candidate isn't automatically deployed; a deployed component isn't automatically routable; documentation isn't permission. A component detail page must always show the distinctions and date of last observed evidence.
+~~~ts
+// TARGET SHAPE — choose exact TypeScript types from real exported code.
+const verificationFeature = defineFeature({
+  id: "behavior.verification",
+  revision: 1,
+  provides: ["behavior:verification"],
+  requires: [
+    "xstate:event:SELECT_BEHAVIOR",
+    "host:feedback-preflight",
+    "host:evidence-validator", // required for STRUCTURED verified terminal state
+  ],
+  binds: {
+    selector: "verification",  // must match an actual BehaviorId
+    state: "verifying",        // must match an actual machine state IF introduced
+    guard: "hasVerifiedEvidence",
+  },
+  tests: ["reject-unverified-completion", "allow-validated-evidence"],
+});
+~~~
 
-### 11.3 Anti-sprawl controls on every component addition/change
+A descriptor is an index and validation contract; **not** the execution logic. To avoid string-only false assurance, tests must prove the host actually invokes the bound guard, rejects an illegal transition and cannot bypass it via another route.
 
-The write path for a component change is:
-**find** existing ID/aliases/semantic equivalent and historical retired/rejected/superseded work -> **inspect** dependents, owners, permissions and policies -> **propose** edit or new component + expected user-visible behavior -> **compute impact** (dependents, callers, affected machines/events, tests, state migrations, Temper grants, docs) -> **review/gate** under existing lifecycle -> **implement** co-located code+descriptor+tests -> **validate** graph and enforcement -> **generate** catalog and docs -> **deploy separately** when authorized -> **read back** effective runtime -> **retire/supersede** stale components explicitly.
+**Assembly invariants (CI + startup):**
+- each provided interface has one registered owner unless explicitly declared multi-provider with deterministic resolution; no duplicate logical IDs or aliases;
+- every required local interface exists, its schema/version is compatible, and its real host/XState hook is wired; no prohibited cycles or unresolved/rejected/retired dependencies;
+- a missing policy guard, validator or required capability **disables/denies the dependent operation**, not just removes a UI badge; normal unrelated chat stays available;
+- policy constraints and human approval cannot be overridden by behavior choice or skill text;
+- an installed skill can REQUEST an allowlisted capability, never grant it; an installed behavior cannot directly authorize a Temper action;
+- no new model-facing tool becomes available solely because its name appears in the graph;
+- incompatible machine/event changes require declared migration or prevented activation for existing sessions.
 
-No automatic new GitHub issue, PR, directory, Plan, schema, policy engine, database or Temper object on every small change. Related additions are packaged in the **existing scoped Work/PR**, with refs linking to the same owner. A change request can touch several components without creating a new project.
+**Priority:** mandatory host/XState gates and Temper authorization > validated behavior choice > optional skill/prompt guidance. A lower layer cannot override the upper layer. Competing selector nominations use an explicit deterministic precedence/fallback, not "last registered wins."
 
-At minimum CI rejects:
-- duplicate logical IDs/aliases, unknown kinds, missing required identity/source or unresolved dependency target;
-- dangling relations, self-dependency and forbidden dependency cycles, missing supersession target, retired capabilities still routed;
-- exposed capability without a real host allowlist/auth/Temper boundary or without expected deny/bypass test references;
-- a claim that a rule is blocking/enforced when interception and negative evidence are absent;
-- missing or stale generated Markdown/catalog, conflicting source/effective version assertions, accidental new route bypass of the feedback gate;
-- removed or renamed component with downstream references and no documented migration/supersession.
-CI can enforce *presence/wiring plus test results*, not independently prove a deployed Temper policy or human approval. Implement validator cases and use actual tested runtime receipts for high-risk claims.
+### 11.3 Build-time output: one bundle fingerprint; no second hand-maintained catalog
 
-### 11.4 One API and one compact management surface
+Source modules and their actual code-bound descriptors -> resolve/validate assembly graph -> emit an immutable \`agent-assembly.manifest.json\` and deterministic \`POLICY.md\` / \`BEHAVIOR.md\` / test-impact projection. All are generated read models, not independent authored sources.
 
-Reuse the **existing authenticated Stately Config/Skills mobile panel**, not a new dashboard/server:
-- **Inventory**: filterable/searchable list of components by kind, owner, lifecycle, effective status and gaps.
-- **Detail**: current declaration, docs, tests/evidence, policy/behavior version, related upstream/downstream components, source link and last effective observation.
-- **Impact**: show "uses", "used by", and affected tests/guards/migrations before a proposed edit; surface conflicts/duplicates/retired identities.
-- **Changes**: show proposed vs reviewed vs source-implemented vs deployed/verified separately, and GitHub Work/PR/Decision links. UI may start read-only; any future mutation must follow approved Stately/Temper path.
-- **Live**: process code/config/machine/behavior, current session state, installed capabilities, connected Temper metadata (fresh or unknown), source/runtime drift.
-Keep graph optional (the typed edges make a later graph view possible without another graph DB). Prioritize compact filterable tables, expandable rows and mobile readability.
+The effective local bundle records: \`assemblyVersion\` (canonical content hash of source declarations/dependency resolution), \`gitSha\`, \`machineVersion\`, \`behaviorVersion\`, \`localPolicyVersion\`, \`promptSkillHash\`, enabled features, dependencies, required tests and optional migrations. Session events pin the historical source/bundle versions; retries/replay reuse the original accepted selection. Live Temper revocation/current policy always wins over old session pins.
 
-Expose one redacted catalog endpoint such as \`GET /api/sessions/:id/components\`, plus component-detail/impact lookup as filters on the same handler if needed, authenticated with the existing session boundary. Reuse the spec's effective-contract API rather than create overlapping separate version/status endpoints. No arbitrary client-provided code or metadata-controlled execution.
+Runtime reads the compiled/validated assembly. On startup, refuse a broken/inconsistent assembly for trusted boundaries. An unavailable Temper service marks its guarded capabilities unavailable/denied without unnecessarily breaking unrelated conversational chat. The source manifest does NOT assert a remote Cedar policy version without independent readback.
 
-### 11.5 Testing the anti-sprawl system
+**Generated catalog** can be searched or inspected as files/API if needed, but a management UI is expressly **not a prerequisite** for building this system.
 
-Add these cases to the existing 20-test plan; they are *specified, not run*:
+### 11.4 Change transaction: always compute impact before accepting the diff
 
-| ID | Input / mutation attempt | Expected proof |
+Treat one scoped reviewed PR/Work as a **change transaction** affecting any number of related components, not one GitHub issue or PR per component.
+
+1. **Locate/reuse:** search by existing stable ID, provided interface, related prior failure/eval and aliases/superseded/rejected components; modify rather than duplicate where appropriate. Semantic "same idea" is review-assisted, NOT guaranteed by static analysis.
+2. **Declare delta:** new/modify/retire, affected features and provides/requires/bindings, accepted dependencies, changed scope/permissions, old/new interface versions and rollout expectations. No implicit privilege expansion.
+3. **Compute transitive reverse dependencies:** derive affected behavior selectors, state machine guards/events, skills, policies, tool call sites, migrations, prompt/docs projections and regression suites. Generate a human-readable \`assembly-impact.md\` in CI/PR artifacts; no new tracking issue required.
+4. **Classify compatibility**: (a) docs/prompt-only, (b) behavior routing, (c) transition/event/snapshot breaking, (d) governed capability/authorization, (e) external outcome/verification. Apply appropriate tests/gates for the highest-impact class.
+5. **Update implementations and links together**: one reviewed source change touching needed files. Enforce that dependencies and tests exist; CI refuses broken bindings, undocumented permissions, stale generated files and missing migrations. Full negative suites for trusted boundaries.
+6. **Activate separately** under existing Work/approval if needed: build, backup, pin/restart only approved service, replay legacy sessions in copies, independently verify running bundle and Temper effective eligibility.
+7. **Preserve history/supersede**: keep stable component identity for compatible edits; new ID plus replacement/ref when semantics fundamentally change; retained historical sessions replay under old versions/migration; retirement only after dependents migrated/disabled and route revoked.
+
+**Concrete delta examples:**
+- **Add a prompt skill:** define skill and descriptor, declare behavior/context constraints, ensure /skill allowlist; generator updates docs; skill never creates a tool grant.
+- **Add a behavior:** implement/extend Tardigrade classification and typed BehaviorId, bind legal XState selection/procedure, attach tests; if machine topology changes bump \`machineVersion\` and migrate persisted sessions.
+- **Modify policy:** host guard or externally approved Temper policy changes at respective enforcement owner; update affected descriptors and deny/bypass tests; policy prose is generated after code change. No TS metadata can override Cedar.
+- **Add a capability:** actual host adapter + exact schema, fixed scope/tenant, auth boundary, constrained caller binding, negative tests and Temper policy evidence; if not separately approved, descriptor remains candidate/disabled.
+- **Retire a component:** dependency search and reconciliation; block removal while active dependents or historical sessions require it; explicit replacements/migrations preserve events, tests and receipts.
+
+### 11.5 Runtime flow and composition verification
+
+The execution order remains:
+\`authenticated input -> journal/state restore -> mandatory host preflight -> Tardigrade proposes behavior -> XState accepts legal event/behavior -> host executes eligible step -> Temper authorizes any governed external operation -> native independent readback -> recorded outcome/next legal state\`.
+
+This is a **logical contract**; code may evaluate preflight/selector in another deterministic order only if no model or effect can escape required gates and the observable sequence is recorded. Tardigrade is never authorization, and verification cannot be inferred from a selector.
+
+CI must exercise actual assembled execution, not only graph parsing. Boundary assertions include: a blocked feedback turn never invokes Luna; rejected XState event never opens an effect; no bypass routes; forged Temper identity/tenant denied; unavailable provider leaves guarded operation blocked; no self-promoted policy/skill; no false structured "verified" terminal state without trusted evidence.
+
+### 11.6 Additional validation cases (add to existing T01–T20)
+
+| ID | Scenario | Required result |
 |---|---|---|
-| T21 | Register duplicate ID/alias or component that repeats an existing logical capability | validation fails or review flags semantic duplicate; no silent second authority |
-| T22 | Reference nonexistent guard, behavior, policy, skill, test or parent component | catalog validation fails with source location |
-| T23 | Rename/remove component used by another behavior or state | impact shows all dependents; fails without migration or supersession |
-| T24 | Retire a capability that is still exposed through a tool route | blocking test/validator fails, no live permission implied |
-| T25 | Two components reference a prohibited dependency cycle | deterministic graph validation fails |
-| T26 | Edit behavior/policy source without regenerating catalog/docs | CI drift check fails |
-| T27 | Repository shows newest component revision but Mac runs older effective SHA | inventory shows source/runtime divergence; no "active" claim |
-| T28 | External Temper policy/spec changes or metadata becomes unavailable | catalog keeps external authority, changes effective status to stale/unknown; no mirrored permit |
-| T29 | Proposed behavior improvement repeats rejected/superseded prior component | lifecycle review shows prior identity, rationale, relevant evidence, and supersession before any activation |
+| T21 | Duplicate logical ID or ambiguous single-provider interface | Assembly validation rejects |
+| T22 | Feature requires nonexistent guard/state/event/validator/test interface | Compile/startup gate rejects, cannot mark enforced |
+| T23 | Change to a shared policy/guard | Impact diff includes all transitive dependents and their affected tests |
+| T24 | Retire a still-invoked capability | Activation blocked until dependents migrate/route revoked |
+| T25 | Prohibited circular feature requirements | Graph resolution rejects with dependency path |
+| T26 | Change behavior code but leave generated assembly/Markdown stale | Deterministic CI drift check rejects |
+| T27 | Git bundle differs from live Mac process and pinned session | Runtime readback distinguishes versions; no invented active status |
+| T28 | Temper policy/credential changes independently or remote verification unavailable | Guarded capability reauthorizes/denies using current Temper, not historical local permit; status unknown if unreadable |
+| T29 | Change duplicates rejected or superseded capability/behavior | History/alias check reports candidate conflict; review requires explicit disposition |
+| T30 | Skill tries to invoke disabled/ungranted capability by adding text to its prompt | Host has no callable route or gate denies; no authority escalation |
+| T31 | Incompatible machine event schema introduced with blocked old session | CI demands tested migration; old session must resume legally or fail closed without fabricated completion |
+| T32 | Feature deletion while historical journal references its version | Preserve versioned replay/migration or block removal; no corrupted/forgotten session |
 
-**Efficiency:** catalog generation and graph validation run deterministically in CI/build or on approved activation, not every message; no added model inference, no per-turn remote scans. Serve a cached immutable source graph + separately timed, redacted runtime observation; invalidate only on code/contract version change and bounded refresh of external status. Measure build and UI query latency on growing fixture catalogs (at least 50, 500 and 5,000 entries); do not add a database until measured limitations justify it.
+Efficiency: one deterministic assembly resolution at build/startup, lightweight static dependency map for impact analysis, **zero additional model calls and no per-turn Temper discovery calls**. Compare CI resolution, normal turn overhead and session replay with realistic fixture sizes. No new persistence system, graph database or central microservice unless measured need.
 
-### 11.6 Merge into the EXISTING work packages
+### 11.7 Modify existing work packages, not ownership structure
 
-- **W0:** add component-source census, duplicate/supersession review and dependency/owner index to current control inventory.
-- **W1:** implement the co-located component descriptors, explicit catalog assembly, deterministic validated JSON/docs and CI drift/relationship checks **together with** the original control registries. This is one implementation, not two registries.
-- **W2/W3:** register actual machine/guard/behavior/verification bindings as they are implemented, then enforce through the existing trusted host and XState paths.
-- **W4:** extend the existing effective-contract mobile/API screen for inventory/detail/impact/status, not a competing UI.
-- **W5:** activation receipts compare catalog source hash, effective process version, independent Temper authority and observed denials/readbacks; migrate/retire replaced components with preserved lineage.
+- **W0:** inventory *feature bundles* and transitive dependencies, duplicate/conflict/supersession history; don't add separate catalog project.
+- **W1:** **agent-assembly.ts + typed provides/requires + graph validation + generated manifest/docs + impact diff**. This replaces a separately maintained "control registry" plus "component catalog".
+- **W2:** wire restored XState states/events and migrations into the same assembly; journal effective version provenance.
+- **W3:** make existing behavior selectors/procedures and verifiers satisfy their declared guard contracts; restrict effect routing through host/Temper.
+- **W4:** implement authenticated effective assembly/version readback. A management UI is optional and explicitly lower priority than reliable wiring/impact validation.
+- **W5:** verify installed bundle, source/runtime match, old-session compatibility, external Temper denial/readback, rollback and governed deployment authority.
 
-**Anti-sprawl acceptance:** each exposed component has exactly one stable logical ID, one accountable implementation owner, resolved typed links, a reviewed history, a single effective-status view, evidence classification and a discoverable detail page. Any missing item is explicitly a gap, not a silent pass. The catalog is an index and management projection, not an invented source of policy authority.
+**Anti-sprawl completion invariant:** there is ONE explicit assembled definition of which components operate together; every externally meaningful interface has one provider, dependencies/tests resolve, changes produce a transitive impact report, incomplete/breaking changes are blocked before activation, and effective versions are evidence-backed. Human documentation and any future visual interface are projections of this assembly, not another editable authority.
 
 ## 12. Acceptance checklist for the completed feature (NOT current status)
 
