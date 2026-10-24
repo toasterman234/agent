@@ -1,6 +1,6 @@
 # Standalone Stately adaptive harness
 
-This is a candidate, single-process Node host for the existing feedback-trigger scaffold. It binds to loopback by default, persists sessions and feedback outside the repository, and keeps production GitHub case filing pending-only.
+This is a candidate, single-process Node host for the existing feedback-trigger scaffold. It binds to loopback by default, persists sessions and feedback outside the repository, and files feedback cases to GitHub (master-repo-0.1) through a verified, idempotent sink when the host credential resolves — otherwise case filing stays pending-only.
 
 ## Runtime identity, policy, and skills (candidate change)
 
@@ -26,7 +26,7 @@ Missing or invalid runtime files prevent startup rather than silently falling ba
 - Private mobile access: Tailscale Serve maps `https://bens-mac-mini.taila1553c.ts.net:8787/` to the loopback service, tailnet-only. No Funnel route was added for this service. The HTTPS health/UI, origin enforcement, two-turn context, feedback dismissal, persistence, and restart recovery were verified from the Mac over the tailnet URL.
 - Runtime identity: the service now loads source-controlled Stately identity, policy, behavior, and prompt-only skill files at startup. The identity/config version is visible through the authenticated config panel/API; changes require a service restart.
 - Live activity: the mobile UI now reports host-observed receipt, feedback checking/judgment, Luna call, persistence, completion, blocked, and failure stages with elapsed timing and expandable traces. It does not expose model reasoning.
-- Case filing: `File case` remains pending-only because no verified runtime adapter for governed intake #76 is enabled. The observed blocker-reporting recurrence was linked to existing Case #80 rather than duplicated.
+- Case filing (#76 binding, 2026-10-24): case-verdict feedback files a real GitHub issue in `toasterman234/master-repo-0.1` via `github-case-sink.ts`. Filings carry the label `stately-case` and an HTML-comment marker `<!-- stately-case-key:<idempotencyKey> -->`; a replay of the same key links the existing issue instead of duplicating it, and the gate accepts a filing only after an independent readback GET confirms the marker on the issue. Credential (Option B): the same host token file Pi uses (`GITHUB_TOKEN` in `~/pi/agent-config/profiles/master-repo-v0.1/secrets.env`, path overridable via `STATELY_GITHUB_TOKEN_FILE`), resolved per call and never logged or returned. When no token resolves, filing fails closed and feedback stays pending-only. The observed blocker-reporting recurrence was linked to existing Case #80 rather than duplicated.
 - Mac deployment: commit `731a648` was fast-forwarded into the Mac checkout and deployed by restarting `com.bencharney.stately-adaptive-harness`; health, config, activity polling, real Luna response, feedback judgment, and the existing HTTPS Tailscale route were read back successfully.
 
 ## Run locally
@@ -46,7 +46,7 @@ Safe environment names:
 - `STATELY_PORT` — defaults to an available local port.
 - `STATELY_ALLOWED_ORIGINS` — comma-separated exact browser origins; required when serving through a private reverse proxy (for example, `https://bens-mac-mini.taila1553c.ts.net:8787`).
 
-The process prints a URL only after its listener is bound. `GET /healthz` returns the model, proxy base URL, configuration status, and `caseFiling: pending-only`; it never returns secrets. With the server running, verify it with `STATELY_URL=http://127.0.0.1:<port> pnpm exec tsx examples/adaptive-harness/app/smoke.ts`.
+The process prints a URL only after its listener is bound. `GET /healthz` returns the model, proxy base URL, configuration status, and `caseFiling` — `github:toasterman234/master-repo-0.1` when the GitHub token resolves at startup, else `pending-only`; it never returns secrets. With the server running, verify it with `STATELY_URL=http://127.0.0.1:<port> pnpm exec tsx examples/adaptive-harness/app/smoke.ts`.
 
 For a private mobile pilot, keep the Node host on loopback and use Tailscale Serve (never Funnel). Set `STATELY_ALLOWED_ORIGINS` to the exact HTTPS Serve origin, then verify `/healthz` and the browser flow from a phone that is signed into the same tailnet. Tailscale ACLs are the network boundary; this candidate has no application user-login system.
 
@@ -74,7 +74,7 @@ Tap **Turn trace** to see timestamped stage transitions relative to turn start. 
 
 The only inbound message route is `POST /api/sessions/:sessionId/messages`. Sessions are created by `POST /api/sessions` and use an HttpOnly, SameSite cookie. A same-origin check rejects browser origins other than the configured local origin. Every message must carry a stable `messageId`; duplicate completed IDs return the persisted response, while reused IDs with different text are rejected.
 
-The route calls `createGatedTurnHost` before the provider. Triggered punctuation/eval messages receive one bounded judge call. The normal model callback is never called while a feedback disposition is pending. A dismissal must include a human reason. Case-worthy feedback remains a visible pending card because no verified #76 adapter is enabled; `File case` is deliberately unavailable and cannot claim a GitHub issue or readback.
+The route calls `createGatedTurnHost` before the provider. Triggered punctuation/eval messages receive one bounded judge call. The normal model callback is never called while a feedback disposition is pending. A dismissal must include a human reason. Case-worthy feedback is filed by the gate through the #76 GitHub sink described above and the reply proceeds only after the filing's independent readback verifies; when the sink is unavailable (no resolvable token), it remains a visible pending card and cannot claim a GitHub issue or readback.
 
 Session files are append-only JSONL with a hash chain, contiguous sequence numbers, atomic rewrite/rename, and per-session in-process serialization. Reopening the store validates the chain and fails closed on corruption. This is a single-process local pilot, not a multi-process transaction store or a deployed service.
 
@@ -114,4 +114,4 @@ A protected gateway request sends `Authorization: Bearer <JWT>` and `X-Tenant-Id
 
 ## Verification limits
 
-The Mac CLIProxyAPI integration uses the existing OpenAI-compatible Chat Completions adapter and direct model id `gpt-5.6-luna`. A live probe must verify the local listener and authenticated request before claiming model connectivity. The repository does not configure Tailscale or launchd itself; the separately authorized Mac runtime currently uses LaunchAgent and private Tailscale Serve. Any mobile exposure must remain private tailnet-only; no Funnel/public exposure is supported. No production GitHub case filing is enabled.
+The Mac CLIProxyAPI integration uses the existing OpenAI-compatible Chat Completions adapter and direct model id `gpt-5.6-luna`. A live probe must verify the local listener and authenticated request before claiming model connectivity. The repository does not configure Tailscale or launchd itself; the separately authorized Mac runtime currently uses LaunchAgent and private Tailscale Serve. Any mobile exposure must remain private tailnet-only; no Funnel/public exposure is supported. GitHub case filing is enabled through the #76 sink when the host token resolves (see Case filing above).

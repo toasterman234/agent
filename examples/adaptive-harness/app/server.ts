@@ -15,6 +15,7 @@ import {
 import {
   createGatedTurnHost,
   type FeedbackJudge,
+  type FeedbackVerdict,
   type IncomingMessage,
   type FeedbackCaseSink,
 } from "../feedback-trigger/host.js";
@@ -52,6 +53,12 @@ import {
   systemInstructions,
   type RuntimeAgentConfig,
 } from "./agent-config.js";
+import {
+  GitHubCaseSink,
+  githubCaseTokenResolvable,
+  GITHUB_CASE_TARGET,
+} from "./github-case-sink.js";
+import { pendingOnlyCaseSink } from "./case-adapter.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const COOKIE = "stately_session";
@@ -151,23 +158,23 @@ function originAllowed(
   return allowed.includes(origin);
 }
 
-function sessionView(state: SessionState) {
+function sessionView(state: SessionState, canFile: boolean) {
   return {
     sessionId: state.sessionId,
     createdAt: state.createdAt,
     messages: state.messages,
-    feedback: state.feedback,
+    feedback: state.feedback.map((item) => feedbackView(item, canFile)),
     temperTraces: state.temperTraces,
     behavior: state.behavior,
     eventCount: state.eventCount,
   };
 }
 
-function feedbackView(feedback: SessionFeedback) {
+function feedbackView(feedback: SessionFeedback, canFile: boolean) {
   return {
     ...feedback,
-    canFile: false,
-    filingStatus: feedback.status === "pending" ? "pending-only" : feedback.status,
+    canFile,
+    filingStatus: feedback.status,
   };
 }
 
@@ -182,6 +189,17 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   // Required configuration is read once at startup; a missing file fails closed.
   const runtimeConfig = options.runtimeConfig ?? loadRuntimeAgentConfig();
   const judge = options.judge ?? createLunaFeedbackJudge(provider);
+  // #76: real GitHub case filing by default (host token file, Option B).
+  // The sink resolves its credential per call; healthz reports the target
+  // only when the token resolves at startup, else stays honestly pending-only.
+  const caseSink = options.caseSink ?? new GitHubCaseSink();
+  const caseFiling = githubCaseTokenResolvable() ? GITHUB_CASE_TARGET : "pending-only";
+  // Drives the feedback card's File button: an explicitly injected sink
+  // counts as available unless it is the pending-only stub; with the default
+  // GitHub sink, availability is the same startup probe healthz reports.
+  const caseFilingAvailable = options.caseSink
+    ? options.caseSink !== pendingOnlyCaseSink
+    : githubCaseTokenResolvable();
   const activity = new ActivityTracker();
   const auth = new Map<string, Set<string>>();
   let actualPort: number | undefined = options.port;
@@ -294,7 +312,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             return {
               kind: "blocked" as const,
               reason: pending.reason,
-              feedback: feedbackView(pending),
+              feedback: feedbackView(pending, caseFilingAvailable),
               state,
             };
         }
@@ -389,7 +407,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
               },
             },
             journal,
-            ...(options.caseSink ? { caseSink: options.caseSink } : {}),
+            caseSink,
           },
           async () => {
             // Record the call intent with its stable callKey BEFORE the
@@ -428,7 +446,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           return {
             kind: "blocked" as const,
             reason: result.feedback.reason,
-            feedback: feedbackView(feedback),
+            feedback: feedbackView(feedback, caseFilingAvailable),
             state,
           };
         }
@@ -504,21 +522,83 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
     );
     if (!state || !feedback || !userMessage)
       throw Object.assign(new Error("Pending feedback not found"), { status: 404 });
-    if (action === "file")
-      throw Object.assign(
-        new Error(
-          "Case filing unavailable: this candidate is pending-only and production GitHub filing is disabled",
-        ),
-        { status: 409 },
-      );
-    const reason = stringField(body, "reason", 1000);
-    if (!reason) throw Object.assign(new Error("A dismissal reason is required"), { status: 400 });
     const signal = detectFeedbackSignal(userMessage.text);
     if (!signal)
       throw Object.assign(new Error("Original feedback signal is no longer valid"), {
         status: 409,
       });
     const key = dispositionKey(sessionId, messageId);
+    if (action === "file") {
+      // #76: the human File action re-judges the original message and files
+      // a case verdict through the same sink the gate uses. Every failure
+      // leaves the feedback pending; nothing is journaled as filed until
+      // the sink's independent GitHub readback verifies the issue.
+      let verdict: FeedbackVerdict;
+      try {
+        verdict = await judge.evaluate({
+          message: { sessionId, messageId, text: userMessage.text },
+          signal,
+        });
+      } catch {
+        throw Object.assign(new Error("Feedback judgment failed"), { status: 409 });
+      }
+      if (verdict.kind !== "case")
+        throw Object.assign(
+          new Error(
+            `Judge did not return a case verdict for this feedback (kind: ${verdict.kind}; reason: ${verdict.reason})`,
+          ),
+          { status: 409 },
+        );
+      let filing: { ref: string };
+      try {
+        filing = await caseSink.fileOrLink({
+          idempotencyKey: key,
+          message: { sessionId, messageId, text: userMessage.text },
+          signal,
+          verdict,
+        });
+      } catch (error) {
+        throw Object.assign(
+          new Error(
+            `Case filing failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+          { status: 409 },
+        );
+      }
+      let verified = false;
+      try {
+        verified = Boolean(filing.ref) && (await caseSink.verify(filing.ref));
+      } catch {
+        verified = false;
+      }
+      if (!verified)
+        throw Object.assign(new Error("Case filing could not be verified"), { status: 409 });
+      const filed = await journal.save({
+        key,
+        messageId,
+        sessionId,
+        sourceHash: sourceHash(userMessage.text),
+        signal,
+        status: "filed",
+        reason: verdict.reason,
+        category: verdict.category,
+        caseRef: filing.ref,
+        recordedAt: new Date().toISOString(),
+      });
+      const filedReadback = await journal.read(key);
+      if (
+        filed.status !== "filed" ||
+        filedReadback?.status !== "filed" ||
+        filedReadback.caseRef !== filing.ref ||
+        filedReadback.sourceHash !== sourceHash(userMessage.text)
+      )
+        throw Object.assign(new Error("Case disposition readback failed"), { status: 409 });
+      await recordFeedback(sessionId, filed);
+      const filedResult = await processMessage(sessionId, messageId, userMessage.text);
+      return filedResult;
+    }
+    const reason = stringField(body, "reason", 1000);
+    if (!reason) throw Object.assign(new Error("A dismissal reason is required"), { status: 400 });
     const saved = await journal.save({
       key,
       messageId,
@@ -705,7 +785,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           model: provider.model,
           proxyBaseUrl: provider.baseUrl,
           proxyConfigured: provider.configured,
-          caseFiling: "pending-only",
+          caseFiling,
           temperRead: "host-controlled-read-only",
           temperTenant: TEMPER_TENANT,
           temperEntityTypes: TEMPER_ALLOWED_ENTITY_TYPES,
@@ -730,7 +810,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         const token = randomUUID();
         const session = await store.create();
         auth.set(token, new Set([session.sessionId]));
-        return json(response, 201, sessionView(session), {
+        return json(response, 201, sessionView(session, caseFilingAvailable), {
           "set-cookie": `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`,
         });
       }
@@ -810,12 +890,16 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       if (request.method === "GET" && parts.length === 3) {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
-        return json(response, 200, sessionView(state));
+        return json(response, 200, sessionView(state, caseFilingAvailable));
       }
       if (request.method === "GET" && parts.length === 4 && parts[3] === "feedback") {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
-        return json(response, 200, state.feedback.map(feedbackView));
+        return json(
+          response,
+          200,
+          state.feedback.map((item) => feedbackView(item, caseFilingAvailable)),
+        );
       }
       if (request.method === "POST" && parts.length === 4 && parts[3] === "messages") {
         const body = await readBody(request);
@@ -827,20 +911,20 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           return json(response, 409, {
             status: "blocked",
             feedback: result.feedback,
-            session: sessionView(result.state),
+            session: sessionView(result.state, caseFilingAvailable),
           });
         if (result.kind === "interrupted")
           return json(response, 409, {
             status: "interrupted",
             error: result.reason,
-            session: sessionView(result.state),
+            session: sessionView(result.state, caseFilingAvailable),
           });
         return json(response, 200, {
           status: "response",
           duplicate: result.duplicate ?? false,
           text: result.text,
           feedback: result.feedback?.status === "no-trigger" ? undefined : result.feedback,
-          session: sessionView(result.state),
+          session: sessionView(result.state, caseFilingAvailable),
         });
       }
       if (
@@ -857,7 +941,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         return json(response, 200, {
           status: "response",
           text: result.text,
-          session: sessionView(result.state),
+          session: sessionView(result.state, caseFilingAvailable),
         });
       }
       return json(response, 404, { error: "Not found" });

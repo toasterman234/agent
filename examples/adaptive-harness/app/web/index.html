@@ -471,7 +471,9 @@
             const reason = document.createElement("p");
             reason.textContent = feedback.reason;
             const notice = document.createElement("small");
-            notice.textContent = "Case filing is unavailable in this candidate harness.";
+            notice.textContent = feedback.canFile
+              ? "Filing creates a GitHub issue in toasterman234/master-repo-0.1."
+              : "Case filing is unavailable in this candidate harness.";
             card.append(heading, reason, notice);
             const dismiss = document.createElement("button");
             dismiss.textContent = "Dismiss with reason";
@@ -500,8 +502,34 @@
               }
             };
             const file = document.createElement("button");
-            file.textContent = "File case (unavailable)";
-            file.disabled = true;
+            if (feedback.canFile) {
+              file.textContent = "File case";
+              file.onclick = async () => {
+                file.disabled = true;
+                beginActivityPolling();
+                try {
+                  const response = await fetch(
+                    `/api/sessions/${encodeURIComponent(session.sessionId)}/feedback/${encodeURIComponent(feedback.messageId)}/disposition`,
+                    {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ action: "file" }),
+                    },
+                  );
+                  const result = await response.json();
+                  if (!response.ok) return alert(result.error ?? "Filing failed");
+                  render(result.session);
+                } catch (error) {
+                  alert(error.message);
+                } finally {
+                  file.disabled = false;
+                  await endActivityPolling();
+                }
+              };
+            } else {
+              file.textContent = "File case (unavailable)";
+              file.disabled = true;
+            }
             card.append(dismiss, file);
             messages.append(card);
           }

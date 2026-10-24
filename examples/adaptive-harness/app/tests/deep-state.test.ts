@@ -3,6 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAdaptiveServer } from "../server.js";
+import { pendingOnlyCaseSink } from "../case-adapter.js";
 import { SessionStore } from "../session-store.js";
 import {
   MachineConflictError,
@@ -38,6 +39,7 @@ async function appWith(fixture: { provider?: ChatProvider; judge?: FeedbackJudge
     port: 0,
     store: new SessionStore(directory),
     provider,
+    caseSink: pendingOnlyCaseSink,
     judge: fixture.judge,
   });
   apps.push({ close: () => closeServer(app.server) });
