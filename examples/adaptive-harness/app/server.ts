@@ -225,113 +225,128 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   const processMessage = async (sessionId: string, messageId: string, text: string) =>
     store.withSession(sessionId, async () => {
       try {
-      let state = await store.load(sessionId);
-      if (!state) throw Object.assign(new Error("Session not found"), { status: 404 });
-      // Validate allowlisted prompt skills before persisting or calling a model.
-      selectRuntimeSkill(text, runtimeConfig);
-      const existingUser = state.messages.find(
-        (message) => message.messageId === messageId && message.role === "user",
-      );
-      const existingAssistant = state.messages.find(
-        (message) => message.messageId === `assistant-${messageId}`,
-      );
-      if (existingUser && existingUser.text !== text)
-        throw Object.assign(new Error("Message id reused with different text"), { status: 409 });
-      if (existingAssistant)
-        return { kind: "response" as const, text: existingAssistant.text, duplicate: true, state };
-      if (existingUser) {
-        const pending = state.feedback.find(
-          (item) => item.messageId === messageId && item.status === "pending",
+        let state = await store.load(sessionId);
+        if (!state) throw Object.assign(new Error("Session not found"), { status: 404 });
+        // Validate allowlisted prompt skills before persisting or calling a model.
+        selectRuntimeSkill(text, runtimeConfig);
+        const existingUser = state.messages.find(
+          (message) => message.messageId === messageId && message.role === "user",
         );
-        if (pending)
+        const existingAssistant = state.messages.find(
+          (message) => message.messageId === `assistant-${messageId}`,
+        );
+        if (existingUser && existingUser.text !== text)
+          throw Object.assign(new Error("Message id reused with different text"), { status: 409 });
+        if (existingAssistant)
           return {
-            kind: "blocked" as const,
-            reason: pending.reason,
-            feedback: feedbackView(pending),
+            kind: "response" as const,
+            text: existingAssistant.text,
+            duplicate: true,
             state,
           };
-      }
-      activity.start(sessionId, messageId, provider.model);
-      activity.mark(sessionId, "checking-feedback");
-      if (!existingUser) {
+        if (existingUser) {
+          const pending = state.feedback.find(
+            (item) => item.messageId === messageId && item.status === "pending",
+          );
+          if (pending)
+            return {
+              kind: "blocked" as const,
+              reason: pending.reason,
+              feedback: feedbackView(pending),
+              state,
+            };
+        }
+        activity.start(sessionId, messageId, provider.model);
+        activity.mark(sessionId, "checking-feedback");
+        if (!existingUser) {
+          state = await store.appendUnlocked(sessionId, [
+            {
+              type: "message.user",
+              message: { messageId, role: "user", text, createdAt: new Date().toISOString() },
+            },
+          ]);
+        }
+        const incoming: IncomingMessage = {
+          sessionId,
+          messageId,
+          text,
+          context: state.messages.map((item) => ({ role: item.role, text: item.text })),
+        };
+        const actor = createConversationActor(sessionId);
+        actor.start();
+        actor.send({ type: "RECEIVE_MESSAGE", messageId, text });
+        const gated = createGatedTurnHost(
+          {
+            judge: {
+              evaluate: async (input) => {
+                activity.mark(sessionId, "judging-feedback");
+                return judge.evaluate(input);
+              },
+            },
+            journal,
+            ...(options.caseSink ? { caseSink: options.caseSink } : {}),
+          },
+          async () => {
+            const result = await normalTurn(state!, incoming)();
+            return result;
+          },
+        );
+        const result = await gated(incoming);
+        if (result.kind === "blocked") {
+          actor.send({
+            type: "FEEDBACK_PENDING",
+            feedback: {
+              messageId,
+              reason: result.feedback.reason,
+              signal: result.feedback.signal?.kind,
+            },
+          });
+          if (result.feedback.disposition)
+            state = await recordFeedback(sessionId, result.feedback.disposition, true);
+          const trace = activity.finish(sessionId, "blocked");
+          if (trace) state = await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]);
+          const feedback = state.feedback.find((item) => item.messageId === messageId) ?? {
+            messageId,
+            status: "pending" as const,
+            reason: result.feedback.reason,
+            createdAt: new Date().toISOString(),
+            signal: result.feedback.signal?.kind,
+          };
+          return {
+            kind: "blocked" as const,
+            reason: result.feedback.reason,
+            feedback: feedbackView(feedback),
+            state,
+          };
+        }
+        actor.send({ type: "REVIEW_PASSED" });
+        const assistant = {
+          messageId: `assistant-${messageId}`,
+          role: "assistant" as const,
+          text: result.result.text,
+          createdAt: new Date().toISOString(),
+        };
+        actor.send({
+          type: "MODEL_RESPONSE",
+          messageId: assistant.messageId,
+          text: assistant.text,
+        });
         state = await store.appendUnlocked(sessionId, [
           {
-            type: "message.user",
-            message: { messageId, role: "user", text, createdAt: new Date().toISOString() },
+            type: "message.assistant",
+            message: assistant,
           },
         ]);
-      }
-      const incoming: IncomingMessage = {
-        sessionId,
-        messageId,
-        text,
-        context: state.messages.map((item) => ({ role: item.role, text: item.text })),
-      };
-      const actor = createConversationActor(sessionId);
-      actor.start();
-      actor.send({ type: "RECEIVE_MESSAGE", messageId, text });
-      const gated = createGatedTurnHost(
-        { judge: { evaluate: async (input) => {
-          activity.mark(sessionId, "judging-feedback");
-          return judge.evaluate(input);
-        } }, journal, ...(options.caseSink ? { caseSink: options.caseSink } : {}) },
-        async () => {
-          const result = await normalTurn(state!, incoming)();
-          return result;
-        },
-      );
-      const result = await gated(incoming);
-      if (result.kind === "blocked") {
-        actor.send({
-          type: "FEEDBACK_PENDING",
-          feedback: {
-            messageId,
-            reason: result.feedback.reason,
-            signal: result.feedback.signal?.kind,
-          },
-        });
-        if (result.feedback.disposition)
+        if (result.feedback.status !== "no-trigger")
           state = await recordFeedback(sessionId, result.feedback.disposition, true);
-        const trace = activity.finish(sessionId, "blocked");
+        const trace = activity.finish(sessionId, "completed");
         if (trace) state = await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]);
-        const feedback = state.feedback.find((item) => item.messageId === messageId) ?? {
-          messageId,
-          status: "pending" as const,
-          reason: result.feedback.reason,
-          createdAt: new Date().toISOString(),
-          signal: result.feedback.signal?.kind,
-        };
         return {
-          kind: "blocked" as const,
-          reason: result.feedback.reason,
-          feedback: feedbackView(feedback),
+          kind: "response" as const,
+          text: result.result.text,
+          feedback: result.feedback,
           state,
         };
-      }
-      actor.send({ type: "REVIEW_PASSED" });
-      const assistant = {
-        messageId: `assistant-${messageId}`,
-        role: "assistant" as const,
-        text: result.result.text,
-        createdAt: new Date().toISOString(),
-      };
-      actor.send({ type: "MODEL_RESPONSE", messageId: assistant.messageId, text: assistant.text });
-      state = await store.appendUnlocked(sessionId, [
-        {
-          type: "message.assistant",
-          message: assistant,
-        },
-      ]);
-      if (result.feedback.status !== "no-trigger")
-        state = await recordFeedback(sessionId, result.feedback.disposition, true);
-      const trace = activity.finish(sessionId, "completed");
-      if (trace) state = await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]);
-      return {
-        kind: "response" as const,
-        text: result.result.text,
-        feedback: result.feedback,
-        state,
-      };
       } catch (error) {
         const trace = activity.finish(sessionId, "failed");
         if (trace) {
