@@ -29,6 +29,13 @@ import {
 } from "./session-store.js";
 import { createConversationActor } from "./conversation.machine.js";
 import { readFile } from "node:fs/promises";
+import {
+  loadRuntimeAgentConfig,
+  runtimeConfigView,
+  selectRuntimeSkill,
+  systemInstructions,
+  type RuntimeAgentConfig,
+} from "./agent-config.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const COOKIE = "stately_session";
@@ -43,6 +50,7 @@ type ServerOptions = {
   provider?: ChatProvider;
   judge?: FeedbackJudge;
   caseSink?: FeedbackCaseSink;
+  runtimeConfig?: RuntimeAgentConfig;
 };
 
 export type AdaptiveServer = {
@@ -149,6 +157,8 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   const dataDirectory = defaultSessionDirectory();
   const journal = options.journal ?? new FileDispositionJournal(join(dataDirectory, "feedback"));
   const provider = options.provider ?? createProxyProvider();
+  // Required configuration is read once at startup; a missing file fails closed.
+  const runtimeConfig = options.runtimeConfig ?? loadRuntimeAgentConfig();
   const judge = options.judge ?? createLunaFeedbackJudge(provider);
   const auth = new Map<string, Set<string>>();
   let actualPort: number | undefined = options.port;
@@ -195,10 +205,15 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         ]);
 
   const normalTurn = (state: SessionState, message: IncomingMessage) => async () => {
-    const context: ProviderMessage[] = state.messages
-      .slice(-10)
-      .map((item) => ({ role: item.role, content: item.text }));
-    context.push({ role: "user", content: message.text });
+    const skill = selectRuntimeSkill(message.text, runtimeConfig);
+    const context: ProviderMessage[] = [
+      { role: "system", content: systemInstructions(runtimeConfig, skill) },
+      ...state.messages
+        .filter((item) => item.messageId !== message.messageId)
+        .slice(-10)
+        .map((item) => ({ role: item.role, content: item.text })),
+      { role: "user", content: message.text },
+    ];
     return provider.generate(context, { maxOutputTokens: 512 });
   };
 
@@ -206,6 +221,8 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
     store.withSession(sessionId, async () => {
       let state = await store.load(sessionId);
       if (!state) throw Object.assign(new Error("Session not found"), { status: 404 });
+      // Validate allowlisted prompt skills before persisting or calling a model.
+      selectRuntimeSkill(text, runtimeConfig);
       const existingUser = state.messages.find(
         (message) => message.messageId === messageId && message.role === "user",
       );
@@ -359,6 +376,8 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           proxyBaseUrl: provider.baseUrl,
           proxyConfigured: provider.configured,
           caseFiling: "pending-only",
+          agent: runtimeConfig.name,
+          configVersion: runtimeConfig.version,
         });
       }
       if (request.method === "GET" && url.pathname === "/") {
@@ -387,6 +406,12 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       const sessionId = parts[2];
       if (!authenticatedSession(request, sessionId))
         return json(response, 401, { error: "Session authentication required" });
+      if (request.method === "GET" && parts.length === 4 && parts[3] === "config") {
+        return json(response, 200, {
+          ...runtimeConfigView(runtimeConfig),
+          model: provider.model,
+        });
+      }
       if (request.method === "GET" && parts.length === 3) {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
