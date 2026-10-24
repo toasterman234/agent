@@ -29,6 +29,7 @@ import {
 } from "./session-store.js";
 import { createConversationActor } from "./conversation.machine.js";
 import { readFile } from "node:fs/promises";
+import { ActivityTracker } from "./activity.js";
 import {
   loadRuntimeAgentConfig,
   runtimeConfigView,
@@ -160,6 +161,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   // Required configuration is read once at startup; a missing file fails closed.
   const runtimeConfig = options.runtimeConfig ?? loadRuntimeAgentConfig();
   const judge = options.judge ?? createLunaFeedbackJudge(provider);
+  const activity = new ActivityTracker();
   const auth = new Map<string, Set<string>>();
   let actualPort: number | undefined = options.port;
 
@@ -214,11 +216,15 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         .map((item) => ({ role: item.role, content: item.text })),
       { role: "user", content: message.text },
     ];
-    return provider.generate(context, { maxOutputTokens: 512 });
+    activity.mark(message.sessionId, "calling-luna");
+    const result = await provider.generate(context, { maxOutputTokens: 512 });
+    activity.mark(message.sessionId, "saving-response", result.usage);
+    return result;
   };
 
   const processMessage = async (sessionId: string, messageId: string, text: string) =>
     store.withSession(sessionId, async () => {
+      try {
       let state = await store.load(sessionId);
       if (!state) throw Object.assign(new Error("Session not found"), { status: 404 });
       // Validate allowlisted prompt skills before persisting or calling a model.
@@ -244,7 +250,10 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             feedback: feedbackView(pending),
             state,
           };
-      } else {
+      }
+      activity.start(sessionId, messageId, provider.model);
+      activity.mark(sessionId, "checking-feedback");
+      if (!existingUser) {
         state = await store.appendUnlocked(sessionId, [
           {
             type: "message.user",
@@ -262,7 +271,10 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       actor.start();
       actor.send({ type: "RECEIVE_MESSAGE", messageId, text });
       const gated = createGatedTurnHost(
-        { judge, journal, ...(options.caseSink ? { caseSink: options.caseSink } : {}) },
+        { judge: { evaluate: async (input) => {
+          activity.mark(sessionId, "judging-feedback");
+          return judge.evaluate(input);
+        } }, journal, ...(options.caseSink ? { caseSink: options.caseSink } : {}) },
         async () => {
           const result = await normalTurn(state!, incoming)();
           return result;
@@ -280,6 +292,8 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         });
         if (result.feedback.disposition)
           state = await recordFeedback(sessionId, result.feedback.disposition, true);
+        const trace = activity.finish(sessionId, "blocked");
+        if (trace) state = await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]);
         const feedback = state.feedback.find((item) => item.messageId === messageId) ?? {
           messageId,
           status: "pending" as const,
@@ -310,12 +324,23 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       ]);
       if (result.feedback.status !== "no-trigger")
         state = await recordFeedback(sessionId, result.feedback.disposition, true);
+      const trace = activity.finish(sessionId, "completed");
+      if (trace) state = await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]);
       return {
         kind: "response" as const,
         text: result.result.text,
         feedback: result.feedback,
         state,
       };
+      } catch (error) {
+        const trace = activity.finish(sessionId, "failed");
+        if (trace) {
+          // Failure telemetry is best-effort: never mask the original failure
+          // or disclose raw provider errors through the trace endpoint.
+          await store.appendUnlocked(sessionId, [{ type: "turn.trace", trace }]).catch(() => {});
+        }
+        throw error;
+      }
     });
 
   const handleDisposition = async (request: NodeRequest, sessionId: string, messageId: string) => {
@@ -406,6 +431,16 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       const sessionId = parts[2];
       if (!authenticatedSession(request, sessionId))
         return json(response, 401, { error: "Session authentication required" });
+      if (request.method === "GET" && parts.length === 4 && parts[3] === "activity") {
+        const state = await store.load(sessionId);
+        if (!state) return json(response, 404, { error: "Session not found" });
+        return json(response, 200, {
+          active: activity.snapshot(sessionId),
+          recent: state.traces.slice(-12).reverse(),
+          serverUptimeSeconds: Math.floor(process.uptime()),
+          agentState: activity.snapshot(sessionId)?.stage ?? "idle",
+        });
+      }
       if (request.method === "GET" && parts.length === 4 && parts[3] === "config") {
         return json(response, 200, {
           ...runtimeConfigView(runtimeConfig),
