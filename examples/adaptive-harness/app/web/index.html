@@ -135,6 +135,27 @@
         color: #aeb8ca;
         font-size: 0.9rem;
       }
+      #activity {
+        border-bottom: 1px solid #303746;
+        padding: .55rem 1rem .65rem;
+        background: #171e2a;
+        font-size: .85rem;
+      }
+      #activity-state { display: flex; align-items: center; gap: .55rem; }
+      #activity-dot { width: .55rem; height: .55rem; border-radius: 50%; background: #69788f; flex-shrink: 0; }
+      #activity-dot.busy { background: #7fb3ff; animation: pulse 1.4s ease-in-out infinite; }
+      #activity-dot.blocked { background: #e3a348; }
+      #activity-dot.failed { background: #e37a7a; }
+      @keyframes pulse { 50% { opacity: .3; } }
+      #activity-meta { color: #aeb8ca; font-size: .75rem; margin-top: .25rem; overflow-wrap: anywhere; }
+      #activity details { margin-top: .35rem; }
+      #activity summary { cursor: pointer; color: #aeb8ca; }
+      #activity-steps { max-height: 125px; overflow: auto; margin: .35rem 0 0; padding-left: 1.3rem; color: #aeb8ca; }
+      #activity-steps li { padding: .15rem 0; }
+      @media (prefers-reduced-motion: reduce) {
+        #activity-dot.busy { animation: none; }
+      }
+
     </style>
   </head>
   <body>
@@ -170,6 +191,14 @@
           >
         </section>
       </header>
+      <section id="activity" aria-label="Agent activity and state">
+        <div id="activity-state" role="status" aria-live="polite">
+          <span id="activity-dot"></span>
+          <strong id="activity-label">Idle · checking connection</strong>
+        </div>
+        <div id="activity-meta" aria-live="off">No turn activity yet</div>
+        <details><summary>Turn trace</summary><ol id="activity-steps"></ol></details>
+      </section>
       <section id="messages" aria-live="polite"></section>
       <footer>
         <form id="chat">
@@ -178,7 +207,7 @@
             autocomplete="off"
             placeholder="Message the local harness…"
             required
-          /><button>Send</button>
+          /><button id="send-button">Send</button>
         </form>
       </footer>
     </main>
@@ -188,6 +217,73 @@
       const input = document.querySelector("#input");
       const configButton = document.querySelector("#config-toggle");
       const configPanel = document.querySelector("#config-panel");
+      const activityLabel = document.querySelector("#activity-label");
+      const activityDot = document.querySelector("#activity-dot");
+      const activityMeta = document.querySelector("#activity-meta");
+      const activitySteps = document.querySelector("#activity-steps");
+      const sendButton = document.querySelector("#send-button");
+      const stageLabels = {
+        "received": "Received message",
+        "checking-feedback": "Checking feedback rules",
+        "judging-feedback": "Evaluating feedback with Luna",
+        "calling-luna": "Waiting for Luna response",
+        "saving-response": "Saving reply",
+        "feedback-pending": "Feedback review pending",
+        "completed": "Response complete",
+        "failed": "Turn failed",
+      };
+      let activityPoll;
+      let sending = false;
+      const seconds = (ms) => (ms / 1000).toFixed(1) + "s";
+      function renderActivity(data) {
+        const active = data.active;
+        const trace = active ?? data.recent?.[0];
+        const stage = active?.stage ?? trace?.steps?.at(-1)?.stage ?? "idle";
+        const status = active ? "working" : trace?.status ?? "idle";
+        activityDot.className = status === "working" ? "busy" : status === "blocked" ? "blocked" : status === "failed" ? "failed" : "";
+        activityLabel.textContent = active
+          ? stageLabels[stage] ?? "Working"
+          : trace ? stageLabels[stage] ?? "Previous turn finished" : "Idle · connected";
+        const elapsed = trace ? seconds(trace.elapsedMs) : "—";
+        const sinceChange = active && active.stageAgeMs > 12000
+          ? ` · No stage change for ${seconds(active.stageAgeMs)} (still awaiting host result)`
+          : "";
+        const usage = !active && trace?.usage?.totalTokens !== undefined
+          ? ` · ${trace.usage.totalTokens} tokens` : "";
+        activityMeta.textContent = `${elapsed} · ${trace?.model ?? "No active turn"}${usage}${sinceChange} · server up ${data.serverUptimeSeconds}s`;
+        activitySteps.replaceChildren();
+        for (const step of trace?.steps ?? []) {
+          const line = document.createElement("li");
+          line.textContent = `${seconds(step.elapsedMs)} · ${stageLabels[step.stage] ?? step.stage}`;
+          activitySteps.append(line);
+        }
+      }
+      async function refreshActivity() {
+        if (!session) return;
+        try {
+          const response = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/activity`,
+            { cache: "no-store" },
+          );
+          if (!response.ok) throw new Error("Activity endpoint unavailable");
+          renderActivity(await response.json());
+        } catch {
+          activityDot.className = "failed";
+          activityLabel.textContent = "Telemetry connection unavailable";
+          activityMeta.textContent = "Cannot verify live agent status";
+        }
+      }
+      function beginActivityPolling() {
+        clearInterval(activityPoll);
+        void refreshActivity();
+        activityPoll = setInterval(() => { void refreshActivity(); }, 850);
+      }
+      async function endActivityPolling() {
+        clearInterval(activityPoll);
+        activityPoll = undefined;
+        await refreshActivity();
+      }
+
       let session;
       const add = (text, role) => {
         const node = document.createElement("div");
@@ -215,6 +311,9 @@
             dismiss.onclick = async () => {
               const reason = window.prompt("Reason for dismissal?");
               if (!reason) return;
+              dismiss.disabled = true;
+              beginActivityPolling();
+              try {
               const response = await fetch(
                 `/api/sessions/${encodeURIComponent(session.sessionId)}/feedback/${encodeURIComponent(feedback.messageId)}/disposition`,
                 {
@@ -226,6 +325,12 @@
               const result = await response.json();
               if (!response.ok) return alert(result.error ?? "Dismissal failed");
               render(result.session);
+              } catch (error) {
+                alert(error.message);
+              } finally {
+                dismiss.disabled = false;
+                await endActivityPolling();
+              }
             };
             const file = document.createElement("button");
             file.textContent = "File case (unavailable)";
@@ -292,13 +397,19 @@
         session = await response.json();
         status.textContent = `Session ${session.sessionId} · pending-only case review`;
         render(session);
+        await refreshActivity();
       }
       document.querySelector("#chat").onsubmit = async (event) => {
         event.preventDefault();
+        if (sending || !session) return;
         const text = input.value.trim();
         if (!text) return;
+        sending = true;
+        sendButton.disabled = true;
         input.value = "";
         add(text, "user");
+        beginActivityPolling();
+        try {
         const response = await fetch(
           `/api/sessions/${encodeURIComponent(session.sessionId)}/messages`,
           {
@@ -318,6 +429,13 @@
         }
         if (result.text) add(result.text, "assistant");
         render(result.session);
+        } catch (error) {
+          add("Request failed: " + error.message, "assistant");
+        } finally {
+          sending = false;
+          sendButton.disabled = false;
+          await endActivityPolling();
+        }
       };
       start().catch((error) => {
         status.textContent = `Unable to start: ${error.message}`;
