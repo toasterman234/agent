@@ -36,21 +36,38 @@ function classify(text: string): BehaviorIntent {
   const t = text.trim();
   if (/^(?:please\s+)?(?:continue|resume|pick up|carry on|keep going)\b/iu.test(t))
     return "continue";
-  if (/^(?:please\s+)?(?:change|revise|modify|instead|actually|but change|update the approach)\b/iu.test(t))
+  if (
+    /^(?:please\s+)?(?:change|revise|modify|instead|actually|but change|update the approach)\b/iu.test(
+      t,
+    )
+  )
     return "revise";
-  if (/^(?:please\s+)?(?:verify|check (?:the|it|that)|test (?:the|it|that)|validate|prove)\b/iu.test(t))
+  if (
+    /^(?:please\s+)?(?:verify|check (?:the|it|that)|test (?:the|it|that)|validate|prove)\b/iu.test(
+      t,
+    )
+  )
     return "verify";
-  if (/^(?:status|what(?:'s| is) the status|any updates|where are we|what happened|what's happening)\b/iu.test(t))
+  if (
+    /^(?:status|what(?:'s| is) the status|any updates|where are we|what happened|what's happening)\b/iu.test(
+      t,
+    )
+  )
     return "status";
   return "discuss";
 }
 
 const instructions: Record<BehaviorId, string> = {
-  "continue-work": "Continue the previous active goal. Do not create a new project or claim work you have not performed.",
-  "revise-work": "Keep the previous active goal; revise only the requested dimension. Preserve earlier evidence and restrictions.",
-  verification: "Identify evidence needed to verify claims. Do not mark a task complete from an agent assertion alone.",
-  "status-check": "Distinguish known recorded progress from unverified live status; do not infer a negative from a missing ping.",
-  conversation: "Answer the current message. Do not assume a new executable project or an active tool capability.",
+  "continue-work":
+    "Continue the previous active goal. Do not create a new project or claim work you have not performed.",
+  "revise-work":
+    "Keep the previous active goal; revise only the requested dimension. Preserve earlier evidence and restrictions.",
+  verification:
+    "Identify evidence needed to verify claims. Do not mark a task complete from an agent assertion alone.",
+  "status-check":
+    "Distinguish known recorded progress from unverified live status; do not infer a negative from a missing ping.",
+  conversation:
+    "Answer the current message. Do not assume a new executable project or an active tool capability.",
 };
 
 export function composeBehavior(
@@ -66,25 +83,42 @@ export function composeBehavior(
   const context = atom((get) => {
     const prior = get(previous);
     const route = get(intent);
-    const recent = get(history).filter((item) => item.messageId !== messageId).slice(-8).map((item) => item.messageId);
+    const recent = get(history)
+      .filter((item) => item.messageId !== messageId)
+      .slice(-8)
+      .map((item) => item.messageId);
     const continuing = Boolean(prior?.goal);
     const behaviorId: BehaviorId =
-      route === "continue" && continuing ? "continue-work" :
-      route === "revise" && continuing ? "revise-work" :
-      route === "verify" ? "verification" :
-      route === "status" ? "status-check" : "conversation";
+      route === "continue" && continuing
+        ? "continue-work"
+        : route === "revise" && continuing
+          ? "revise-work"
+          : route === "verify"
+            ? "verification"
+            : route === "status"
+              ? "status-check"
+              : "conversation";
     const firstNewGoal = get(currentText).trim().slice(0, 180) || null;
-    const goal = continuing && ["continue", "revise", "status", "verify"].includes(route)
-      ? prior!.goal
-      : route === "discuss" ? firstNewGoal : prior?.goal ?? firstNewGoal;
-    const mode: BehaviorMode = behaviorId === "verification" ? "verification"
-      : behaviorId === "continue-work" || behaviorId === "revise-work"
-        ? (prior?.mode === "verification" ? "verification" : "implementation")
-        : prior?.mode ?? "conversation";
-    const phase: BehaviorPhase = behaviorId === "verification"
-      ? "verifying"
-      : behaviorId === "continue-work" || behaviorId === "revise-work" ? "working"
-      : prior?.phase ?? "ready";
+    const goal =
+      continuing && ["continue", "revise", "status", "verify"].includes(route)
+        ? prior!.goal
+        : route === "discuss"
+          ? firstNewGoal
+          : (prior?.goal ?? firstNewGoal);
+    const mode: BehaviorMode =
+      behaviorId === "verification"
+        ? "verification"
+        : behaviorId === "continue-work" || behaviorId === "revise-work"
+          ? prior?.mode === "verification"
+            ? "verification"
+            : "implementation"
+          : (prior?.mode ?? "conversation");
+    const phase: BehaviorPhase =
+      behaviorId === "verification"
+        ? "verifying"
+        : behaviorId === "continue-work" || behaviorId === "revise-work"
+          ? "working"
+          : (prior?.phase ?? "ready");
     return {
       messageId,
       version: BEHAVIOR_VERSION,
@@ -94,9 +128,10 @@ export function composeBehavior(
       phase,
       goal,
       memoryRefs: recent,
-      reason: continuing && ["continue", "revise", "status", "verify"].includes(route)
-        ? "Current message interpreted with the previously persisted goal."
-        : "Selected from the current message and available session context.",
+      reason:
+        continuing && ["continue", "revise", "status", "verify"].includes(route)
+          ? "Current message interpreted with the previously persisted goal."
+          : "Selected from the current message and available session context.",
     } satisfies BehaviorSelection;
   });
   const store = createStore();
