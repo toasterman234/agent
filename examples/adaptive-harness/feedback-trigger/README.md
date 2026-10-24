@@ -5,7 +5,7 @@ Source requirement: [master-repo-0.1 #388](https://github.com/toasterman234/mast
 
 ## Why this is a harness behavior
 
-The **host** (not the model) calls `gateInboundFeedback` before producing a response. `detector.ts` deterministically nominates a feedback review; `machine.ts` restricts the flow to `detected → judging → recordingDismissal/recordingCase → allowed/blocked`. The host owns the actor instance and the ALLOW_* events. A hosted model must never be handed the actor handle or those events as callable tools.
+The **host** (not the model) exposes `createGatedTurnHost`, which calls `gateInboundFeedback` before invoking the ordinary agent. The wrapper refuses to invoke that callback when the gate blocks. `detector.ts` deterministically nominates a feedback review; `machine.ts` restricts the flow to `detected → judging → recordingDismissal/recordingCase → allowed/blocked`. The host owns the actor instance and the ALLOW_* events. A hosted model must never be handed the actor handle or those events as callable tools.
 
 `gate.ts` requires a reasoned judgment and durable journal readback for dismissal; a case judgment additionally requires a case sink's independently verified reference and saved disposition. When judgment, Case intake, or persistence fails, it returns `replyAllowed: false` with a visible pending record where possible. The application MUST withhold its normal reply unless `replyAllowed` is true. It may send a separate operational error/blocked notification. Merely importing the module, or attaching passive trace observers, cannot enforce the guarantee.
 
@@ -20,7 +20,7 @@ Quotations and excitement still nominate; the contextual judge must dismiss fals
 ## Minimal host wiring
 
 ```ts
-import { gateInboundFeedback } from "./feedback-trigger/gate.js";
+import { createGatedTurnHost } from "./feedback-trigger/host.js";
 import { FileDispositionJournal } from "./feedback-trigger/journal.js";
 
 const journal = new FileDispositionJournal("./.local-feedback-dispositions");
@@ -32,16 +32,12 @@ const judge = { evaluate: async ({ message, signal }) => yourFeedbackJudge(messa
 // fileOrLink({ idempotencyKey, ... }) -> { ref }; verify(ref) -> boolean.
 const caseSink = yourAuthorizedCaseSink;
 
-async function onIncomingMessage(message: {
-  sessionId: string; messageId: string; text: string;
-}) {
-  const result = await gateInboundFeedback(message, { judge, journal, caseSink });
-  if (!result.replyAllowed) {
-    // Operational alert/retry path only. Do NOT run the ordinary agent response.
-    return { blocked: true, reason: result.reason };
-  }
-  return runNormalAgentTurn(message);
-}
+const onIncomingMessage = createGatedTurnHost(
+  { judge, journal, caseSink },
+  runNormalAgentTurn,
+);
+// Expose onIncomingMessage as the ONLY public ingress. When blocked, the
+// result is { kind: "blocked", feedback: ... } and normalTurn was not called.
 ```
 
 The snippet is **integration pseudocode**: `yourFeedbackJudge`, `yourAuthorizedCaseSink`, and `runNormalAgentTurn` are host-provided functions, not implemented library exports. The tests use injected fakes. Without a case sink, case-worthy verdicts remain pending and blocked, not falsely "filed".
@@ -68,7 +64,7 @@ Also run the repository's existing lint and format checks before adoption. No pr
 - **E36/#386:** a status response from a worker "running" flag must be separately gated on fresh worker transcript **and** system-of-record reads.
 - **E37/#387:** an assistant's self-diagnosis can occur in generated output; it needs a controlled egress/finalization check, not just this inbound punctuation detector.
 - Session-oriented intent routing, KiwiFS, Temper, agent policy evolution, scheduled backstop auditor, UI, and adapter deployment are outside this bounded candidate.
-- Runtime interception applies only to inbound messages that actually flow through `gateInboundFeedback`. Other ingress and alternate tool routes must be closed/tested before claiming enforcement in a deployed agent.
+- Runtime interception applies only to inbound messages that actually flow through the gated host entry point. Other ingress and alternate tool routes must be closed/tested before claiming enforcement in a deployed agent.
 
 ## Acceptance and traceability
 
