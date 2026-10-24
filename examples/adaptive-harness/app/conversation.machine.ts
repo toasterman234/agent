@@ -93,7 +93,9 @@ export const conversationMachine = conversationSetup.createMachine({
       on: {
         SELECT_BEHAVIOR: ({ context, event }) =>
           context.lastMessageId === event.messageId &&
-          ["continue-work", "revise-work", "verification", "status-check", "conversation"].includes(event.behaviorId)
+          ["continue-work", "revise-work", "verification", "status-check", "conversation"].includes(
+            event.behaviorId,
+          )
             ? { context: { ...context, selectedBehavior: event.behaviorId } }
             : undefined,
         REVIEW_PASSED: { target: "generating" },
