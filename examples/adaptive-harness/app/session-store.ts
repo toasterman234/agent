@@ -21,6 +21,26 @@ export type SessionFeedback = {
   createdAt: string;
 };
 
+/** A host-authorized external XState event, journaled for replay (machine v2). */
+export type MachineEventRecord = {
+  eventId: string;
+  messageId?: string;
+  callKey?: string;
+  event: { type: string; [key: string]: unknown };
+  recordedAt: string;
+};
+
+/** A cache of a validated persisted actor snapshot; never its own authority. */
+export type MachineCheckpoint = {
+  machineId: string;
+  machineVersion: string;
+  revision: number;
+  anchorSeq: number;
+  anchorHash: string | null;
+  snapshot: unknown;
+  createdAt: string;
+};
+
 export type SessionEvent =
   | { type: "session.created"; sessionId: string; createdAt: string }
   | { type: "message.user"; message: SessionMessage }
@@ -28,9 +48,11 @@ export type SessionEvent =
   | { type: "feedback.updated"; feedback: SessionFeedback }
   | { type: "turn.trace"; trace: TurnTrace }
   | { type: "temper.trace"; trace: TemperCapabilityTrace }
-  | { type: "behavior.selected"; selection: BehaviorSelection };
+  | { type: "behavior.selected"; selection: BehaviorSelection }
+  | { type: "machine.event"; record: MachineEventRecord }
+  | { type: "machine.checkpoint"; checkpoint: MachineCheckpoint };
 
-type StoredEvent = {
+export type StoredEvent = {
   schemaVersion: 1;
   seq: number;
   event: SessionEvent;
@@ -46,6 +68,8 @@ export type SessionState = {
   traces: TurnTrace[];
   temperTraces: TemperCapabilityTrace[];
   behavior: BehaviorSelection | null;
+  machineEvents: MachineEventRecord[];
+  checkpoint: MachineCheckpoint | null;
   eventCount: number;
   lastHash: string | null;
 };
@@ -148,6 +172,33 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
     }
     return existing ? state : { ...state, feedback: [...state.feedback, event.feedback] };
   }
+  if (event.type === "machine.event") {
+    const record = event.record;
+    if (
+      !record ||
+      typeof record.eventId !== "string" ||
+      !record.event ||
+      typeof record.event.type !== "string" ||
+      typeof record.recordedAt !== "string"
+    )
+      throw new Error("Invalid machine event record");
+    if (state.machineEvents.some((item) => item.eventId === record.eventId)) return state;
+    return { ...state, machineEvents: [...state.machineEvents, record] };
+  }
+  if (event.type === "machine.checkpoint") {
+    const checkpoint = event.checkpoint;
+    if (
+      !checkpoint ||
+      typeof checkpoint.machineId !== "string" ||
+      typeof checkpoint.machineVersion !== "string" ||
+      !Number.isInteger(checkpoint.revision) ||
+      !Number.isInteger(checkpoint.anchorSeq) ||
+      typeof checkpoint.createdAt !== "string" ||
+      !("snapshot" in checkpoint)
+    )
+      throw new Error("Invalid machine checkpoint");
+    return { ...state, checkpoint };
+  }
   return state;
 }
 
@@ -160,6 +211,8 @@ function emptyState(sessionId = ""): SessionState {
     traces: [],
     temperTraces: [],
     behavior: null,
+    machineEvents: [],
+    checkpoint: null,
     eventCount: 0,
     lastHash: null,
   };
@@ -186,7 +239,10 @@ export class SessionStore {
     }
   }
 
-  async load(sessionId: string): Promise<SessionState | undefined> {
+  /** Read + hash-chain-verify the full journal. Any corruption fails closed. */
+  async loadJournal(
+    sessionId: string,
+  ): Promise<{ state: SessionState; entries: StoredEvent[] } | undefined> {
     let raw: string;
     try {
       raw = await readFile(eventPath(this.directory, sessionId), "utf8");
@@ -195,6 +251,7 @@ export class SessionStore {
       throw error;
     }
     const state = emptyState(sessionId);
+    const entries: StoredEvent[] = [];
     let expectedSeq = 0;
     let previousHash: string | null = null;
     for (const line of raw.split("\n").filter(Boolean)) {
@@ -204,6 +261,7 @@ export class SessionStore {
         throw new Error("Session event sequence is not contiguous");
       }
       Object.assign(state, applyEvent(state, parsed.event));
+      entries.push(parsed);
       expectedSeq += 1;
       previousHash = parsed.hash;
     }
@@ -211,7 +269,11 @@ export class SessionStore {
       throw new Error("Empty or invalid session event log");
     state.eventCount = expectedSeq;
     state.lastHash = previousHash;
-    return state;
+    return { state, entries };
+  }
+
+  async load(sessionId: string): Promise<SessionState | undefined> {
+    return (await this.loadJournal(sessionId))?.state;
   }
 
   async create(sessionId: string = randomUUID()): Promise<SessionState> {
@@ -253,7 +315,9 @@ export class SessionStore {
         event.type !== "feedback.updated" &&
         event.type !== "turn.trace" &&
         event.type !== "temper.trace" &&
-        event.type !== "behavior.selected"
+        event.type !== "behavior.selected" &&
+        event.type !== "machine.event" &&
+        event.type !== "machine.checkpoint"
       ) {
         throw new Error("Unsupported session event");
       }
