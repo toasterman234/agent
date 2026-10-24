@@ -7,7 +7,8 @@ import { CaseFilingUnavailableError } from "../case-adapter.js";
 import { startAdaptiveServer } from "../server.js";
 import { SessionStore } from "../session-store.js";
 import type { ChatProvider } from "../proxy-provider.js";
-import type { FeedbackCaseSink } from "../../feedback-trigger/host.js";
+import type { FeedbackCaseSink, FeedbackJudge } from "../../feedback-trigger/host.js";
+import { FileDispositionJournal, dispositionKey } from "../../feedback-trigger/journal.js";
 
 const FAKE_TOKEN = "<MASKED_SECRET_001>";
 const KEY = "session-1:message-1";
@@ -263,5 +264,196 @@ describe("server wiring", () => {
         ),
     });
     expect((await healthz(app)).caseFiling).toBe("pending-only");
+  });
+});
+
+describe("disposition file action", () => {
+  const provider = {
+    baseUrl: "http://fake/v1",
+    model: "fake-model",
+    configured: true,
+    generate: async () => ({ text: "normal answer", model: "fake-model" }),
+  } satisfies ChatProvider;
+
+  const caseJudge: FeedbackJudge = {
+    evaluate: async () => ({
+      kind: "case",
+      reason: "Repeated wrong behavior after correction",
+      category: "agent-behavior",
+    }),
+  };
+
+  async function harness(judge: FeedbackJudge) {
+    const directory = await tempDir();
+    const journal = new FileDispositionJournal(join(directory, "feedback-journal"));
+    const gh = fakeGitHub();
+    const tokenPath = join(directory, "secrets.env");
+    const sink = new GitHubCaseSink({ fetchImpl: gh.fetchImpl, tokenFilePath: tokenPath });
+    const app = await startAdaptiveServer({
+      port: 0,
+      store: new SessionStore(join(directory, "sessions")),
+      journal,
+      provider,
+      judge,
+      caseSink: sink,
+    });
+    servers.push({
+      close: () =>
+        new Promise<void>((resolve, reject) =>
+          app.server.close((error) => (error ? reject(error) : resolve())),
+        ),
+    });
+    return { app, gh, journal, tokenPath };
+  }
+
+  async function createSession(app: Awaited<ReturnType<typeof startAdaptiveServer>>) {
+    const address = app.address()!;
+    const response = await fetch(`http://${address.host}:${address.port}/api/sessions`, {
+      method: "POST",
+    });
+    const body = (await response.json()) as { sessionId: string };
+    const setCookie = response.headers.getSetCookie?.()[0] ?? response.headers.get("set-cookie");
+    if (!setCookie) throw new Error("session creation failed: missing cookie");
+    return { sessionId: body.sessionId, cookie: setCookie.split(";", 1)[0]! };
+  }
+
+  async function postJson(
+    app: Awaited<ReturnType<typeof startAdaptiveServer>>,
+    cookie: string,
+    path: string,
+    payload: unknown,
+  ) {
+    const address = app.address()!;
+    return fetch(`http://${address.host}:${address.port}${path}`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async function feedbackView(
+    app: Awaited<ReturnType<typeof startAdaptiveServer>>,
+    cookie: string,
+    sessionId: string,
+  ) {
+    const address = app.address()!;
+    const response = await fetch(
+      `http://${address.host}:${address.port}/api/sessions/${sessionId}/feedback`,
+      { headers: { cookie } },
+    );
+    return (await response.json()) as Array<{
+      messageId: string;
+      status: string;
+      filingStatus: string;
+      caseRef?: string;
+    }>;
+  }
+
+  const MESSAGE = { messageId: "feedback-file-1", text: "???" };
+
+  test("files a pending case once the token appears, with exactly one GitHub create", async () => {
+    const { app, gh, journal, tokenPath } = await harness(caseJudge);
+    const { sessionId, cookie } = await createSession(app);
+
+    // First pass: the sink cannot resolve a token, so the gate blocks and
+    // the feedback goes pending without any GitHub call.
+    const blocked = await postJson(app, cookie, `/api/sessions/${sessionId}/messages`, MESSAGE);
+    expect(blocked.status).toBe(409);
+    expect((await blocked.json()).feedback.status).toBe("pending");
+    expect(gh.calls.filter((call) => call.method === "POST")).toHaveLength(0);
+    const pendingView = await feedbackView(app, cookie, sessionId);
+    expect(pendingView[0]?.status).toBe("pending");
+    expect(pendingView[0]?.filingStatus).toBe("pending");
+
+    // The credential arrives; the human File action now completes the case.
+    await writeFile(tokenPath, `GITHUB_TOKEN=<redacted>\n`);
+    const filed = await postJson(
+      app,
+      cookie,
+      `/api/sessions/${sessionId}/feedback/${MESSAGE.messageId}/disposition`,
+      { action: "file" },
+    );
+    expect(filed.status).toBe(200);
+    const filedBody = (await filed.json()) as { status: string; text: string };
+    expect(filedBody.status).toBe("response");
+    expect(filedBody.text).toBe("normal answer");
+
+    // Exactly one issue was created across the whole scenario.
+    expect(gh.calls.filter((call) => call.method === "POST")).toHaveLength(1);
+    expect(gh.issues).toHaveLength(1);
+
+    const persisted = await app.store.load(sessionId);
+    expect(persisted?.feedback[0]?.status).toBe("filed");
+    expect(persisted?.feedback[0]?.caseRef).toBe("github:toasterman234/master-repo-0.1#101");
+    const filedView = await feedbackView(app, cookie, sessionId);
+    expect(filedView[0]?.filingStatus).toBe("filed");
+
+    const disposition = await journal.read(dispositionKey(sessionId, MESSAGE.messageId));
+    expect(disposition?.status).toBe("filed");
+    expect(disposition?.caseRef).toBe("github:toasterman234/master-repo-0.1#101");
+    expect(disposition?.category).toBe("agent-behavior");
+  });
+
+  test("file action is refused when the judge no longer returns a case verdict", async () => {
+    let calls = 0;
+    const flipJudge: FeedbackJudge = {
+      evaluate: async () => {
+        calls += 1;
+        return calls === 1
+          ? {
+              kind: "case",
+              reason: "Repeated wrong behavior after correction",
+              category: "agent-behavior",
+            }
+          : { kind: "dismiss", reason: "On review, no concrete failure" };
+      },
+    };
+    const { app, gh, journal } = await harness(flipJudge);
+    const { sessionId, cookie } = await createSession(app);
+
+    const blocked = await postJson(app, cookie, `/api/sessions/${sessionId}/messages`, MESSAGE);
+    expect(blocked.status).toBe(409);
+
+    const refused = await postJson(
+      app,
+      cookie,
+      `/api/sessions/${sessionId}/feedback/${MESSAGE.messageId}/disposition`,
+      { action: "file" },
+    );
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toContain("did not return a case verdict");
+    expect(gh.calls.filter((call) => call.method === "POST")).toHaveLength(0);
+    expect(gh.issues).toHaveLength(0);
+
+    const persisted = await app.store.load(sessionId);
+    expect(persisted?.feedback[0]?.status).toBe("pending");
+    const disposition = await journal.read(dispositionKey(sessionId, MESSAGE.messageId));
+    expect(disposition?.status).toBe("pending");
+  });
+
+  test("file action surfaces the sink failure and leaves the feedback pending", async () => {
+    const { app, gh, journal } = await harness(caseJudge);
+    const { sessionId, cookie } = await createSession(app);
+
+    const blocked = await postJson(app, cookie, `/api/sessions/${sessionId}/messages`, MESSAGE);
+    expect(blocked.status).toBe(409);
+
+    // The token file never appears, so the sink still fails closed.
+    const failed = await postJson(
+      app,
+      cookie,
+      `/api/sessions/${sessionId}/feedback/${MESSAGE.messageId}/disposition`,
+      { action: "file" },
+    );
+    expect(failed.status).toBe(409);
+    expect((await failed.json()).error).toContain("Case filing failed");
+    expect(gh.calls).toHaveLength(0);
+    expect(gh.issues).toHaveLength(0);
+
+    const persisted = await app.store.load(sessionId);
+    expect(persisted?.feedback[0]?.status).toBe("pending");
+    const disposition = await journal.read(dispositionKey(sessionId, MESSAGE.messageId));
+    expect(disposition?.status).toBe("pending");
+    expect(disposition?.caseRef).toBeUndefined();
   });
 });

@@ -15,6 +15,7 @@ import {
 import {
   createGatedTurnHost,
   type FeedbackJudge,
+  type FeedbackVerdict,
   type IncomingMessage,
   type FeedbackCaseSink,
 } from "../feedback-trigger/host.js";
@@ -172,7 +173,7 @@ function feedbackView(feedback: SessionFeedback) {
   return {
     ...feedback,
     canFile: false,
-    filingStatus: feedback.status === "pending" ? "pending-only" : feedback.status,
+    filingStatus: feedback.status,
   };
 }
 
@@ -514,21 +515,83 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
     );
     if (!state || !feedback || !userMessage)
       throw Object.assign(new Error("Pending feedback not found"), { status: 404 });
-    if (action === "file")
-      throw Object.assign(
-        new Error(
-          "Case filing unavailable: this candidate is pending-only and production GitHub filing is disabled",
-        ),
-        { status: 409 },
-      );
-    const reason = stringField(body, "reason", 1000);
-    if (!reason) throw Object.assign(new Error("A dismissal reason is required"), { status: 400 });
     const signal = detectFeedbackSignal(userMessage.text);
     if (!signal)
       throw Object.assign(new Error("Original feedback signal is no longer valid"), {
         status: 409,
       });
     const key = dispositionKey(sessionId, messageId);
+    if (action === "file") {
+      // #76: the human File action re-judges the original message and files
+      // a case verdict through the same sink the gate uses. Every failure
+      // leaves the feedback pending; nothing is journaled as filed until
+      // the sink's independent GitHub readback verifies the issue.
+      let verdict: FeedbackVerdict;
+      try {
+        verdict = await judge.evaluate({
+          message: { sessionId, messageId, text: userMessage.text },
+          signal,
+        });
+      } catch {
+        throw Object.assign(new Error("Feedback judgment failed"), { status: 409 });
+      }
+      if (verdict.kind !== "case")
+        throw Object.assign(
+          new Error(
+            `Judge did not return a case verdict for this feedback (kind: ${verdict.kind}; reason: ${verdict.reason})`,
+          ),
+          { status: 409 },
+        );
+      let filing: { ref: string };
+      try {
+        filing = await caseSink.fileOrLink({
+          idempotencyKey: key,
+          message: { sessionId, messageId, text: userMessage.text },
+          signal,
+          verdict,
+        });
+      } catch (error) {
+        throw Object.assign(
+          new Error(
+            `Case filing failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+          { status: 409 },
+        );
+      }
+      let verified = false;
+      try {
+        verified = Boolean(filing.ref) && (await caseSink.verify(filing.ref));
+      } catch {
+        verified = false;
+      }
+      if (!verified)
+        throw Object.assign(new Error("Case filing could not be verified"), { status: 409 });
+      const filed = await journal.save({
+        key,
+        messageId,
+        sessionId,
+        sourceHash: sourceHash(userMessage.text),
+        signal,
+        status: "filed",
+        reason: verdict.reason,
+        category: verdict.category,
+        caseRef: filing.ref,
+        recordedAt: new Date().toISOString(),
+      });
+      const filedReadback = await journal.read(key);
+      if (
+        filed.status !== "filed" ||
+        filedReadback?.status !== "filed" ||
+        filedReadback.caseRef !== filing.ref ||
+        filedReadback.sourceHash !== sourceHash(userMessage.text)
+      )
+        throw Object.assign(new Error("Case disposition readback failed"), { status: 409 });
+      await recordFeedback(sessionId, filed);
+      const filedResult = await processMessage(sessionId, messageId, userMessage.text);
+      return filedResult;
+    }
+    const reason = stringField(body, "reason", 1000);
+    if (!reason) throw Object.assign(new Error("A dismissal reason is required"), { status: 400 });
     const saved = await journal.save({
       key,
       messageId,
