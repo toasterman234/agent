@@ -102,18 +102,20 @@ export function composeBehavior(
   const store = createStore();
   try {
     const selection = store.get(context);
-    return {
-      selection,
-      instruction: [
-        "# Host-selected behavior (Tardigrade projection; subject to XState gate)",
-        `Behavior: ${selection.behaviorId}; intent: ${selection.intent}; mode: ${selection.mode}; phase: ${selection.phase}.`,
-        selection.goal ? `Active goal: ${selection.goal}` : "No confirmed active goal.",
-        `Relevant local message IDs: ${selection.memoryRefs.join(", ") || "none"}.`,
-        instructions[selection.behaviorId],
-        "The host has not granted additional tools, long-term memory, or remote execution through this selection.",
-      ].join("\n"),
-    };
+    return { selection, instruction: behaviorInstructions(selection) };
   } finally {
     store.dispose();
   }
+}
+
+/** Reuse persisted selection on retries; never reclassify one message ID. */
+export function behaviorInstructions(selection: BehaviorSelection): string {
+  return [
+    "# Host-selected behavior (Tardigrade projection; subject to XState gate)",
+    `Behavior: ${selection.behaviorId}; intent: ${selection.intent}; mode: ${selection.mode}; phase: ${selection.phase}.`,
+    selection.goal ? `Active goal: ${selection.goal}` : "No confirmed active goal.",
+    `Relevant local message IDs: ${selection.memoryRefs.join(", ") || "none"}.`,
+    instructions[selection.behaviorId],
+    "The host has not granted additional tools, long-term memory, or remote execution through this selection.",
+  ].join("\n");
 }
