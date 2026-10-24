@@ -7,6 +7,7 @@ import { SessionStore } from "../session-store.js";
 import type { ChatProvider } from "../proxy-provider.js";
 import type { FeedbackJudge } from "../../feedback-trigger/host.js";
 import { TemperGateway } from "../temper-gateway.js";
+import { pendingOnlyCaseSink } from "../case-adapter.js";
 
 const apps: Array<{ close: () => Promise<void> }> = [];
 const close = (server: { close(callback: (error?: Error) => void): void }) =>
@@ -37,6 +38,7 @@ async function appWith(
     port: 0,
     store: new SessionStore(directory),
     provider,
+    caseSink: pendingOnlyCaseSink,
     judge: fixture.judge,
     allowedOrigin: fixture.allowedOrigin,
     temperGateway: fixture.temperGateway,

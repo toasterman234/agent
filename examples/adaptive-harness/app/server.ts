@@ -52,6 +52,11 @@ import {
   systemInstructions,
   type RuntimeAgentConfig,
 } from "./agent-config.js";
+import {
+  GitHubCaseSink,
+  githubCaseTokenResolvable,
+  GITHUB_CASE_TARGET,
+} from "./github-case-sink.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const COOKIE = "stately_session";
@@ -182,6 +187,11 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   // Required configuration is read once at startup; a missing file fails closed.
   const runtimeConfig = options.runtimeConfig ?? loadRuntimeAgentConfig();
   const judge = options.judge ?? createLunaFeedbackJudge(provider);
+  // #76: real GitHub case filing by default (host token file, Option B).
+  // The sink resolves its credential per call; healthz reports the target
+  // only when the token resolves at startup, else stays honestly pending-only.
+  const caseSink = options.caseSink ?? new GitHubCaseSink();
+  const caseFiling = githubCaseTokenResolvable() ? GITHUB_CASE_TARGET : "pending-only";
   const activity = new ActivityTracker();
   const auth = new Map<string, Set<string>>();
   let actualPort: number | undefined = options.port;
@@ -389,7 +399,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
               },
             },
             journal,
-            ...(options.caseSink ? { caseSink: options.caseSink } : {}),
+            caseSink,
           },
           async () => {
             // Record the call intent with its stable callKey BEFORE the
@@ -705,7 +715,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           model: provider.model,
           proxyBaseUrl: provider.baseUrl,
           proxyConfigured: provider.configured,
-          caseFiling: "pending-only",
+          caseFiling,
           temperRead: "host-controlled-read-only",
           temperTenant: TEMPER_TENANT,
           temperEntityTypes: TEMPER_ALLOWED_ENTITY_TYPES,
