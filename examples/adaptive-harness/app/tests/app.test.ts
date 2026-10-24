@@ -197,7 +197,6 @@ describe("standalone adaptive harness", () => {
   });
 });
 
-
 describe("runtime agent identity, policy and prompt skills", () => {
   test("every normal turn receives the Stately system prompt before conversation messages", async () => {
     const calls: Array<Array<{ role: string; content: string }>> = [];
@@ -212,9 +211,13 @@ describe("runtime agent identity, policy and prompt skills", () => {
     };
     const { app } = await appWith({ provider });
     const { session: created, cookie } = await session(app);
-    for (const [id, text] of [["identity-1", "Who are you?"], ["identity-2", "And your role?"]]) {
+    for (const [id, text] of [
+      ["identity-1", "Who are you?"],
+      ["identity-2", "And your role?"],
+    ]) {
       const response = await post(app, cookie, `/api/sessions/${created.sessionId}/messages`, {
-        messageId: id, text,
+        messageId: id,
+        text,
       });
       expect(response.status).toBe(200);
     }
@@ -268,20 +271,23 @@ describe("runtime agent identity, policy and prompt skills", () => {
     const { session: created, cookie } = await session(app);
     const endpoint = `/api/sessions/${created.sessionId}/messages`;
     const skill = await post(app, cookie, endpoint, {
-      messageId: "skill-1", text: "/skill summarize-session What happened?",
+      messageId: "skill-1",
+      text: "/skill summarize-session What happened?",
     });
     expect(skill.status).toBe(200);
     expect(instructions[0]).toContain("Selected prompt skill: summarize-session");
     expect(instructions[0]).toContain("bounded recent");
 
     const ordinary = await post(app, cookie, endpoint, {
-      messageId: "ordinary-1", text: "Thank you.",
+      messageId: "ordinary-1",
+      text: "Thank you.",
     });
     expect(ordinary.status).toBe(200);
     expect(instructions[1]).not.toContain("Selected prompt skill:");
 
     const unknown = await post(app, cookie, endpoint, {
-      messageId: "invalid-1", text: "/skill nonexistent Try it",
+      messageId: "invalid-1",
+      text: "/skill nonexistent Try it",
     });
     expect(unknown.status).toBe(400);
     expect((await unknown.json()).error).toContain("Unknown runtime skill");
@@ -289,8 +295,10 @@ describe("runtime agent identity, policy and prompt skills", () => {
     const { host, port } = app.address()!;
     const saved = await fetch(`http://${host}:${port}/api/sessions/${created.sessionId}`, {
       headers: { cookie },
-    }).then(r => r.json());
-    expect(saved.messages.some((message: { messageId: string }) => message.messageId === "invalid-1")).toBe(false);
+    }).then((r) => r.json());
+    expect(
+      saved.messages.some((message: { messageId: string }) => message.messageId === "invalid-1"),
+    ).toBe(false);
   });
 
   test("runtime identity is required and deterministic; missing config never silently falls back", async () => {
