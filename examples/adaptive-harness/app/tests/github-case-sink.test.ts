@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitHubCaseSink } from "../github-case-sink.js";
-import { CaseFilingUnavailableError } from "../case-adapter.js";
+import { CaseFilingUnavailableError, pendingOnlyCaseSink } from "../case-adapter.js";
 import { startAdaptiveServer } from "../server.js";
 import { SessionStore } from "../session-store.js";
 import type { ChatProvider } from "../proxy-provider.js";
@@ -345,6 +345,7 @@ describe("disposition file action", () => {
       messageId: string;
       status: string;
       filingStatus: string;
+      canFile: boolean;
       caseRef?: string;
     }>;
   }
@@ -364,6 +365,7 @@ describe("disposition file action", () => {
     const pendingView = await feedbackView(app, cookie, sessionId);
     expect(pendingView[0]?.status).toBe("pending");
     expect(pendingView[0]?.filingStatus).toBe("pending");
+    expect(pendingView[0]?.canFile).toBe(true);
 
     // The credential arrives; the human File action now completes the case.
     await writeFile(tokenPath, `GITHUB_TOKEN=<redacted>\n`);
@@ -455,5 +457,107 @@ describe("disposition file action", () => {
     const disposition = await journal.read(dispositionKey(sessionId, MESSAGE.messageId));
     expect(disposition?.status).toBe("pending");
     expect(disposition?.caseRef).toBeUndefined();
+  });
+});
+
+describe("canFile payload", () => {
+  const provider = {
+    baseUrl: "http://fake/v1",
+    model: "fake-model",
+    configured: true,
+    generate: async () => ({ text: "normal answer", model: "fake-model" }),
+  } satisfies ChatProvider;
+
+  const caseJudge: FeedbackJudge = {
+    evaluate: async () => ({
+      kind: "case",
+      reason: "Repeated wrong behavior after correction",
+      category: "agent-behavior",
+    }),
+  };
+
+  async function start(options: { caseSink?: FeedbackCaseSink; judge: FeedbackJudge }) {
+    const directory = await tempDir();
+    const app = await startAdaptiveServer({
+      port: 0,
+      store: new SessionStore(join(directory, "sessions")),
+      journal: new FileDispositionJournal(join(directory, "feedback-journal")),
+      provider,
+      judge: options.judge,
+      ...(options.caseSink ? { caseSink: options.caseSink } : {}),
+    });
+    servers.push({
+      close: () =>
+        new Promise<void>((resolve, reject) =>
+          app.server.close((error) => (error ? reject(error) : resolve())),
+        ),
+    });
+    return app;
+  }
+
+  async function blockedFeedback(app: Awaited<ReturnType<typeof startAdaptiveServer>>) {
+    const address = app.address()!;
+    const created = await fetch(`http://${address.host}:${address.port}/api/sessions`, {
+      method: "POST",
+    });
+    const { sessionId } = (await created.json()) as { sessionId: string };
+    const setCookie = created.headers.getSetCookie?.()[0] ?? created.headers.get("set-cookie");
+    if (!setCookie) throw new Error("session creation failed: missing cookie");
+    const cookie = setCookie.split(";", 1)[0]!;
+    const blocked = await fetch(
+      `http://${address.host}:${address.port}/api/sessions/${sessionId}/messages`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ messageId: "canfile-1", text: "???" }),
+      },
+    );
+    expect(blocked.status).toBe(409);
+    const response = await fetch(
+      `http://${address.host}:${address.port}/api/sessions/${sessionId}/feedback`,
+      { headers: { cookie } },
+    );
+    return (await response.json()) as Array<{ status: string; canFile: boolean }>;
+  }
+
+  test("canFile is true with the default sink when a token file resolves", async () => {
+    process.env.STATELY_GITHUB_TOKEN_FILE = await tokenFile();
+    // The verdict carries no category, so the gate blocks as an invalid case
+    // judgment before the sink is consulted: zero GitHub calls are possible.
+    const uncategorizedCaseJudge: FeedbackJudge = {
+      evaluate: async () => ({ kind: "case", reason: "Verdict without a category", category: "" }),
+    };
+    const app = await start({ judge: uncategorizedCaseJudge });
+    const view = await blockedFeedback(app);
+    expect(view[0]?.status).toBe("pending");
+    expect(view[0]?.canFile).toBe(true);
+  });
+
+  test("canFile is false with the default sink when no token resolves", async () => {
+    process.env.STATELY_GITHUB_TOKEN_FILE = join(await tempDir(), "absent.env");
+    const app = await start({ judge: caseJudge });
+    const view = await blockedFeedback(app);
+    expect(view[0]?.status).toBe("pending");
+    expect(view[0]?.canFile).toBe(false);
+  });
+
+  test("canFile is false when the pending-only sink is injected", async () => {
+    const app = await start({ caseSink: pendingOnlyCaseSink, judge: caseJudge });
+    const view = await blockedFeedback(app);
+    expect(view[0]?.status).toBe("pending");
+    expect(view[0]?.canFile).toBe(false);
+  });
+
+  test("the served page wires the File action behind feedback.canFile", async () => {
+    const app = await start({ judge: caseJudge });
+    const address = app.address()!;
+    const response = await fetch(`http://${address.host}:${address.port}/`);
+    expect(response.status).toBe(200);
+    const page = await response.text();
+    expect(page).toContain("feedback.canFile");
+    expect(page).toContain('action: "file"');
+    expect(page).toContain("File case");
+    expect(page).toContain("File case (unavailable)");
+    expect(page).toContain("Filing creates a GitHub issue in toasterman234/master-repo-0.1.");
   });
 });

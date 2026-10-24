@@ -58,6 +58,7 @@ import {
   githubCaseTokenResolvable,
   GITHUB_CASE_TARGET,
 } from "./github-case-sink.js";
+import { pendingOnlyCaseSink } from "./case-adapter.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const COOKIE = "stately_session";
@@ -157,22 +158,22 @@ function originAllowed(
   return allowed.includes(origin);
 }
 
-function sessionView(state: SessionState) {
+function sessionView(state: SessionState, canFile: boolean) {
   return {
     sessionId: state.sessionId,
     createdAt: state.createdAt,
     messages: state.messages,
-    feedback: state.feedback,
+    feedback: state.feedback.map((item) => feedbackView(item, canFile)),
     temperTraces: state.temperTraces,
     behavior: state.behavior,
     eventCount: state.eventCount,
   };
 }
 
-function feedbackView(feedback: SessionFeedback) {
+function feedbackView(feedback: SessionFeedback, canFile: boolean) {
   return {
     ...feedback,
-    canFile: false,
+    canFile,
     filingStatus: feedback.status,
   };
 }
@@ -193,6 +194,12 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
   // only when the token resolves at startup, else stays honestly pending-only.
   const caseSink = options.caseSink ?? new GitHubCaseSink();
   const caseFiling = githubCaseTokenResolvable() ? GITHUB_CASE_TARGET : "pending-only";
+  // Drives the feedback card's File button: an explicitly injected sink
+  // counts as available unless it is the pending-only stub; with the default
+  // GitHub sink, availability is the same startup probe healthz reports.
+  const caseFilingAvailable = options.caseSink
+    ? options.caseSink !== pendingOnlyCaseSink
+    : githubCaseTokenResolvable();
   const activity = new ActivityTracker();
   const auth = new Map<string, Set<string>>();
   let actualPort: number | undefined = options.port;
@@ -305,7 +312,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
             return {
               kind: "blocked" as const,
               reason: pending.reason,
-              feedback: feedbackView(pending),
+              feedback: feedbackView(pending, caseFilingAvailable),
               state,
             };
         }
@@ -439,7 +446,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           return {
             kind: "blocked" as const,
             reason: result.feedback.reason,
-            feedback: feedbackView(feedback),
+            feedback: feedbackView(feedback, caseFilingAvailable),
             state,
           };
         }
@@ -803,7 +810,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         const token = randomUUID();
         const session = await store.create();
         auth.set(token, new Set([session.sessionId]));
-        return json(response, 201, sessionView(session), {
+        return json(response, 201, sessionView(session, caseFilingAvailable), {
           "set-cookie": `${COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`,
         });
       }
@@ -883,12 +890,16 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       if (request.method === "GET" && parts.length === 3) {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
-        return json(response, 200, sessionView(state));
+        return json(response, 200, sessionView(state, caseFilingAvailable));
       }
       if (request.method === "GET" && parts.length === 4 && parts[3] === "feedback") {
         const state = await store.load(sessionId);
         if (!state) return json(response, 404, { error: "Session not found" });
-        return json(response, 200, state.feedback.map(feedbackView));
+        return json(
+          response,
+          200,
+          state.feedback.map((item) => feedbackView(item, caseFilingAvailable)),
+        );
       }
       if (request.method === "POST" && parts.length === 4 && parts[3] === "messages") {
         const body = await readBody(request);
@@ -900,20 +911,20 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
           return json(response, 409, {
             status: "blocked",
             feedback: result.feedback,
-            session: sessionView(result.state),
+            session: sessionView(result.state, caseFilingAvailable),
           });
         if (result.kind === "interrupted")
           return json(response, 409, {
             status: "interrupted",
             error: result.reason,
-            session: sessionView(result.state),
+            session: sessionView(result.state, caseFilingAvailable),
           });
         return json(response, 200, {
           status: "response",
           duplicate: result.duplicate ?? false,
           text: result.text,
           feedback: result.feedback?.status === "no-trigger" ? undefined : result.feedback,
-          session: sessionView(result.state),
+          session: sessionView(result.state, caseFilingAvailable),
         });
       }
       if (
@@ -930,7 +941,7 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
         return json(response, 200, {
           status: "response",
           text: result.text,
-          session: sessionView(result.state),
+          session: sessionView(result.state, caseFilingAvailable),
         });
       }
       return json(response, 404, { error: "Not found" });
