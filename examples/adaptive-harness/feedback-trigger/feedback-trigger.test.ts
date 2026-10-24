@@ -7,6 +7,7 @@ import { detectFeedbackSignal } from "./detector.js";
 import { gateInboundFeedback, type FeedbackCaseSink, type FeedbackGateDeps } from "./gate.js";
 import { dispositionKey, FileDispositionJournal, type DispositionJournal } from "./journal.js";
 import { feedbackTriggerMachine } from "./machine.js";
+import { createGatedTurnHost } from "./host.js";
 
 describe("feedback signal nomination — #388", () => {
   test.each([
@@ -231,5 +232,44 @@ describe("host-gated feedback with file-backed journal", () => {
     const files = await import("node:fs/promises").then((fs) => fs.readdir(root));
     const raw = await readFile(join(root, files.find((f) => f.endsWith(".json"))!), "utf8");
     expect(JSON.parse(raw).messageId).toBe("restart");
+  });
+});
+
+
+describe("composed host ingress cannot skip a blocked disposition", () => {
+  test("case signal blocks normal turn until verified, then resumes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "stately-feedback-host-"));
+    try {
+      const journal = new FileDispositionJournal(dir);
+      const judge = {
+        evaluate: async () => ({
+          kind: "case" as const,
+          reason: "Repeated status assertion without reading worker record",
+          category: "verification",
+        }),
+      };
+      const normalTurn = vi.fn().mockResolvedValue("normal answer");
+      const incoming = { sessionId: "host", messageId: "m1", text: "status?????" };
+      const blockedHost = createGatedTurnHost({ judge, journal }, normalTurn);
+      expect(await blockedHost(incoming)).toMatchObject({
+        kind: "blocked",
+        feedback: { replyAllowed: false, status: "blocked" },
+      });
+      expect(normalTurn).not.toHaveBeenCalled();
+
+      const sink: FeedbackCaseSink = {
+        fileOrLink: async () => ({ ref: "case:host" }),
+        verify: async () => true,
+      };
+      const allowedHost = createGatedTurnHost({ judge, journal, caseSink: sink }, normalTurn);
+      expect(await allowedHost(incoming)).toMatchObject({
+        kind: "response",
+        result: "normal answer",
+        feedback: { replyAllowed: true, status: "filed" },
+      });
+      expect(normalTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
