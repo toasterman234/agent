@@ -276,7 +276,7 @@
       </section>
       <section id="temper-capability" aria-label="Temper read capability">
         <div class="capability-heading">
-          <strong>Temper · read-only</strong>
+          <strong>Temper · host-controlled</strong>
           <small id="temper-capability-status"
             >Host-controlled capability · tenant incident-rca</small
           >
@@ -287,6 +287,9 @@
             <option value="metadata">Metadata</option>
             <option value="allowed-entities">Allowed entity types</option>
             <option value="read-entity">Read entity</option>
+            <option value="fixture-begin-investigation">
+              Fixture: begin investigation (gated)
+            </option>
           </select>
           <select id="temper-entity-type" aria-label="Temper entity type" hidden>
             <option value="Incident">Incident</option>
@@ -515,7 +518,10 @@
         if (!session || temperRead.disabled) return;
         temperRead.disabled = true;
         temperStatus.textContent = "Requested · incident-rca · authenticating";
-        temperResult.textContent = "Reading Temper…";
+        temperResult.textContent =
+          temperCapability.value === "fixture-begin-investigation"
+            ? "Requesting gated Temper write…"
+            : "Reading Temper…";
         try {
           const body = { capability: temperCapability.value };
           if (temperCapability.value === "read-entity") {
@@ -533,8 +539,13 @@
           const data = await response.json();
           if (!response.ok) throw new Error(data.error ?? "Temper read failed");
           const result = data.result;
-          temperStatus.textContent = `Succeeded · ${result.tenant} · ${result.principal} · ${result.correlationId}`;
-          temperResult.textContent = JSON.stringify(result.entity ?? result, null, 2);
+          if (temperCapability.value === "fixture-begin-investigation") {
+            temperStatus.textContent = `Succeeded · ${result.tenant} · ${result.principal ?? "stately"} · ${result.outcome}`;
+            temperResult.textContent = result.message ?? result.outcome;
+          } else {
+            temperStatus.textContent = `Succeeded · ${result.tenant} · ${result.principal} · ${result.correlationId}`;
+            temperResult.textContent = JSON.stringify(result.entity ?? result, null, 2);
+          }
           await refreshActivity();
         } catch (error) {
           temperStatus.textContent = `Failed · incident-rca`;

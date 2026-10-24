@@ -30,6 +30,17 @@ export type MachineEventRecord = {
   recordedAt: string;
 };
 
+/** One governed Temper write attempt/outcome, journaled for idempotent retry (P3). */
+export type TemperWriteRecord = {
+  key: string;
+  action: "BeginInvestigation";
+  entityType: "Incident";
+  entityId: string;
+  phase: "attempt" | "outcome";
+  outcome?: string;
+  at: string;
+};
+
 /** A cache of a validated persisted actor snapshot; never its own authority. */
 export type MachineCheckpoint = {
   machineId: string;
@@ -50,7 +61,8 @@ export type SessionEvent =
   | { type: "temper.trace"; trace: TemperCapabilityTrace }
   | { type: "behavior.selected"; selection: BehaviorSelection }
   | { type: "machine.event"; record: MachineEventRecord }
-  | { type: "machine.checkpoint"; checkpoint: MachineCheckpoint };
+  | { type: "machine.checkpoint"; checkpoint: MachineCheckpoint }
+  | { type: "temper.write"; record: TemperWriteRecord };
 
 export type StoredEvent = {
   schemaVersion: 1;
@@ -70,6 +82,7 @@ export type SessionState = {
   behavior: BehaviorSelection | null;
   machineEvents: MachineEventRecord[];
   checkpoint: MachineCheckpoint | null;
+  temperWrites: TemperWriteRecord[];
   eventCount: number;
   lastHash: string | null;
 };
@@ -185,6 +198,21 @@ function applyEvent(state: SessionState, event: SessionEvent): SessionState {
     if (state.machineEvents.some((item) => item.eventId === record.eventId)) return state;
     return { ...state, machineEvents: [...state.machineEvents, record] };
   }
+  if (event.type === "temper.write") {
+    const record = event.record;
+    if (
+      !record ||
+      typeof record.key !== "string" ||
+      record.action !== "BeginInvestigation" ||
+      record.entityType !== "Incident" ||
+      typeof record.entityId !== "string" ||
+      !["attempt", "outcome"].includes(record.phase) ||
+      typeof record.at !== "string" ||
+      (record.outcome !== undefined && typeof record.outcome !== "string")
+    )
+      throw new Error("Invalid Temper write record");
+    return { ...state, temperWrites: [...state.temperWrites, record] };
+  }
   if (event.type === "machine.checkpoint") {
     const checkpoint = event.checkpoint;
     if (
@@ -213,6 +241,7 @@ function emptyState(sessionId = ""): SessionState {
     behavior: null,
     machineEvents: [],
     checkpoint: null,
+    temperWrites: [],
     eventCount: 0,
     lastHash: null,
   };
@@ -317,7 +346,8 @@ export class SessionStore {
         event.type !== "temper.trace" &&
         event.type !== "behavior.selected" &&
         event.type !== "machine.event" &&
-        event.type !== "machine.checkpoint"
+        event.type !== "machine.checkpoint" &&
+        event.type !== "temper.write"
       ) {
         throw new Error("Unsupported session event");
       }

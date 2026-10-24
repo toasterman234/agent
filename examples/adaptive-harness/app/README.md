@@ -86,6 +86,8 @@ The host includes a bounded `TemperGateway` for the existing Mac Temper kernel. 
 - `metadata` / `allowed-entities` (allowlisted `Incident`, `Remediation`, `Postmortem` types)
 - `read-entity` for one explicitly allowlisted entity type and validated ID
 
+One gated write exists (P3, `fixture-begin-investigation`): it sends exactly one governed action — `BeginInvestigation` with `InvestigatorId: "stately"` — to the single fixture Incident named by host configuration (`STATELY_TEMPER_FIXTURE_INCIDENT_ID`); the entity and action never come from the client or the model, and the capability returns `400 fixture not configured` when the variable is unset. Cedar currently denies the write for the `stately` principal, so the kernel mints a pending decision and the capability reports `pending-approval`; only after a human approves in Temper does a retry apply the action (verified by readback: `Investigating` / `stately`). Each attempt and outcome is journaled in the session (`temper.write`, idempotency key `p3:<sessionId>:BeginInvestigation`); a session that already recorded `applied` returns it without calling Temper again, and a fixture already `Investigating` by `stately` reports `already-applied` with no action sent.
+
 The model receives no arbitrary HTTP client, bearer token, tenant selector, Temper action method, or approval/rejection capability. The authenticated session UI exposes the read panel at `POST /api/sessions/:sessionId/temper`; activity readback records `requested → authenticating → reading → succeeded|denied|failed`, duration, tenant, nonsecret principal, sanitized result/error and correlation ID. Entity response contents are returned only to the authenticated read request, never to telemetry traces.
 
 The protected runtime identity file is outside Git at `~/.config/stately-temper/temper.jwt` (directory mode `0700`, file mode `0600`). It is a short-lived issuer JWT for `client_id=stately`, `agent_type=stately`; the existing local issuer is used and no private key is copied. The current LaunchAgent configuration was not changed by this source work. For an ephemeral local verification process:
@@ -106,6 +108,7 @@ Safe Temper environment names:
 - `STATELY_TEMPER_BASE_URL` — defaults to `http://127.0.0.1:3000`.
 - `STATELY_TEMPER_TOKEN_FILE` — protected local JWT path; the token value is never logged or returned.
 - `STATELY_TEMPER_PRINCIPAL` — defaults to `stately`; source/runtime policy must not point this at `astro`, `ben`, `supervisor`, or `operator`.
+- `STATELY_TEMPER_FIXTURE_INCIDENT_ID` — the one P3 fixture Incident the gated write may target; unset disables the write capability.
 
 A protected gateway request sends `Authorization: Bearer <JWT>` and `X-Tenant-Id: incident-rca`. Missing, invalid/expired, wrong-tenant, forbidden, timeout and upstream failures become structured sanitized errors. Strict Cedar hardening to forbid all direct create/write operations for the `stately` JWT identity is a separate Temper policy change; no such policy mutation is performed by this candidate.
 

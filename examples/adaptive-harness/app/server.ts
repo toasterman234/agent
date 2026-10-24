@@ -37,6 +37,7 @@ import {
   TEMPER_ALLOWED_ENTITY_TYPES,
   TEMPER_TENANT,
   type TemperAllowedEntityType,
+  type TemperFixtureWriteResult,
 } from "./temper-gateway.js";
 import {
   composeBehavior,
@@ -534,6 +535,80 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
     return result;
   };
 
+  const FIXTURE_WRITE_MESSAGES: Record<TemperFixtureWriteResult["outcome"], string> = {
+    applied: "Applied — fixture is now Investigating",
+    "already-applied":
+      "Already applied — fixture is already Investigating with Stately as investigator",
+    "pending-approval": "Pending approval — the request is waiting on Ben's Temper decision",
+    conflict: "Conflict — fixture is not in a state Stately may act on",
+  };
+
+  /**
+   * P3 gated write: the target Incident and action are host-fixed. Any entityId or
+   * action fields a client sends are ignored; the fixture id comes only from host
+   * configuration. The attempt is journaled before the gateway call and the outcome
+   * after, so a retry in the same session dedupes on the recorded outcome.
+   */
+  const runFixtureWrite = async (sessionId: string, correlationId: string) => {
+    const fixtureId = temperGateway.fixtureIncidentId;
+    if (!fixtureId) throw Object.assign(new Error("fixture not configured"), { status: 400 });
+    const key = `p3:${sessionId}:BeginInvestigation`;
+    const current = await store.load(sessionId);
+    const recorded = current?.temperWrites.find(
+      (record) => record.key === key && record.phase === "outcome" && record.outcome === "applied",
+    );
+    if (recorded) {
+      return {
+        capability: "fixture-begin-investigation",
+        outcome: "applied" as const,
+        correlationId,
+        tenant: TEMPER_TENANT,
+        deduplicated: true,
+        entityType: "Incident" as const,
+        entityId: fixtureId,
+        entityStatus: "Investigating",
+        message: FIXTURE_WRITE_MESSAGES.applied,
+      };
+    }
+    const base = {
+      key,
+      action: "BeginInvestigation" as const,
+      entityType: "Incident" as const,
+      entityId: fixtureId,
+    };
+    await store.appendUnlocked(sessionId, [
+      { type: "temper.write", record: { ...base, phase: "attempt", at: new Date().toISOString() } },
+    ]);
+    const write = await temperGateway.beginFixtureInvestigation({ correlationId });
+    await store.appendUnlocked(sessionId, [
+      {
+        type: "temper.write",
+        record: {
+          ...base,
+          phase: "outcome",
+          outcome: write.outcome,
+          at: new Date().toISOString(),
+        },
+      },
+    ]);
+    return {
+      capability: "fixture-begin-investigation",
+      outcome: write.outcome,
+      correlationId,
+      tenant: write.tenant,
+      principal: write.principal,
+      entityType: write.entityType,
+      entityId: write.entityId,
+      ...(write.entity !== undefined ? { entity: write.entity } : {}),
+      ...(write.entityStatus ? { entityStatus: write.entityStatus } : {}),
+      ...(write.status ? { status: write.status } : {}),
+      message:
+        write.outcome === "conflict"
+          ? `Conflict — fixture is ${write.entityStatus ?? "unknown"}; no action was sent`
+          : FIXTURE_WRITE_MESSAGES[write.outcome],
+    };
+  };
+
   const handleTemperCapability = async (request: NodeRequest, sessionId: string) => {
     const body = await readBody(request);
     const capability = stringField(body, "capability", 40);
@@ -542,7 +617,13 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
     if (!state) throw Object.assign(new Error("Session not found"), { status: 404 });
     if (
       !capability ||
-      !["health", "metadata", "allowed-entities", "read-entity"].includes(capability)
+      ![
+        "health",
+        "metadata",
+        "allowed-entities",
+        "read-entity",
+        "fixture-begin-investigation",
+      ].includes(capability)
     )
       throw Object.assign(new Error("Unknown Temper capability"), { status: 400 });
 
@@ -555,6 +636,10 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       } else if (capability === "metadata" || capability === "allowed-entities") {
         activity.markTemper(sessionId, "reading");
         result = await temperGateway.listAllowedEntities({ correlationId });
+      } else if (capability === "fixture-begin-investigation") {
+        // Host-fixed target: body fields naming an entity or action are ignored.
+        activity.markTemper(sessionId, "writing");
+        result = await runFixtureWrite(sessionId, correlationId);
       } else {
         const entityType = stringField(body, "entityType", 40);
         const entityId = stringField(body, "entityId", 128);
@@ -578,11 +663,13 @@ export function createAdaptiveServer(options: ServerOptions = {}): AdaptiveServe
       const trace = activity.finishTemper(sessionId, "succeeded", {
         principal,
         result:
-          capability === "read-entity"
-            ? `read ${(result as { entityType: string }).entityType} ${(result as { entityId: string }).entityId}`
-            : capability === "allowed-entities"
-              ? `listed ${((result as { entityTypes?: unknown[] }).entityTypes ?? []).length} allowlisted types`
-              : capability,
+          capability === "fixture-begin-investigation"
+            ? `fixture BeginInvestigation ${(result as { outcome: string }).outcome}`
+            : capability === "read-entity"
+              ? `read ${(result as { entityType: string }).entityType} ${(result as { entityId: string }).entityId}`
+              : capability === "allowed-entities"
+                ? `listed ${((result as { entityTypes?: unknown[] }).entityTypes ?? []).length} allowlisted types`
+                : capability,
       });
       if (trace) await store.appendUnlocked(sessionId, [{ type: "temper.trace", trace }]);
       return result;

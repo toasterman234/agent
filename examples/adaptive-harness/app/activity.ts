@@ -34,6 +34,7 @@ export type TemperCapabilityState =
   | "requested"
   | "authenticating"
   | "reading"
+  | "writing"
   | "succeeded"
   | "denied"
   | "failed";
